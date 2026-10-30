@@ -1,0 +1,20 @@
+#!/bin/sh
+# Chat entry. Reads AGENT_HOME from the env file. No account name is baked in.
+set -eu
+ENV_FILE="${ENV_FILE:-/etc/expense-agent-v2/env}"
+export ENV_FILE
+AGENT_HOME=$(python3 - "$ENV_FILE" <<'PY'
+import sys
+from pathlib import Path
+home = ""
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    if line.startswith("AGENT_HOME="):
+        home = line.split("=", 1)[1].strip().strip("'\"")
+print(home)
+PY
+)
+if [ -z "$AGENT_HOME" ]; then
+  echo "AGENT_HOME is empty in $ENV_FILE" >&2
+  exit 2
+fi
+exec "$AGENT_HOME/.venv/bin/python" "$AGENT_HOME/agent.py" "$@"

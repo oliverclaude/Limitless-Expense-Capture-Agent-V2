@@ -63,3 +63,25 @@ hermes gateway run
 as `${HERMES_USER}`, with `HERMES_HOME` set to that account's Hermes home (usually `~/.hermes`). That process loads `~/.hermes/.env` and `config.yaml`, subscribes to `Fin-Limitless-V2`, and ticks scheduled jobs every 60 seconds. There is no second expense process.
 
 Send a message to `Fin-Limitless-V2` from the phone. The reply should come back on that topic. Version 1 should stay silent, because it is still on `Fin-Limitless`.
+
+## 6. Install the expense program
+
+Do this once, as `${HERMES_USER}`, after the gateway is running. Do not stop version 1. The bot does not run `sudo`.
+
+```bash
+cd "$AGENT_HOME"
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+chmod +x bin/expense-v2 scripts/expense-v2-poll.py
+ln -sfn "$AGENT_HOME/bin/expense-v2" "$HOME/.local/bin/expense-v2"
+```
+
+`$AGENT_HOME` is this checkout. Put that path in `/etc/expense-agent-v2/env` as `AGENT_HOME`. On that same file, set `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, and `OLLAMA_API_KEY` to the local model Hermes already uses. Leave the server address out of git.
+
+Point `skills.external_dirs` in `~/.hermes/config.yaml` at `$AGENT_HOME/skills`. Then record the mail job once:
+
+```bash
+expense-v2 install-cron
+```
+
+That creates one Hermes cron job named `expense-v2`, every `POLL_INTERVAL_MINUTES` (30), with no model in the job. The job's stdout stays empty. Pictures and words are sent by the program. A chat reply runs `expense-v2 reply`, not `poll`.
