@@ -17,5 +17,8 @@ for line in Path(os.environ["ENV_FILE"]).read_text(encoding="utf-8").splitlines(
 if not home:
     raise SystemExit("AGENT_HOME is empty")
 agent = Path(home) / "agent.py"
+repo = str(agent.parent)
+if repo not in sys.path:
+    sys.path.insert(0, repo)
 sys.argv = [str(agent), "poll"]
 runpy.run_path(str(agent), run_name="__main__")
