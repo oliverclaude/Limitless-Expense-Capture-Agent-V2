@@ -753,10 +753,13 @@ def install_cron() -> None:
         raise RuntimeError(f"missing {source}")
     scripts = Path.home() / ".hermes" / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
+    # A symlink is rejected: Hermes resolves the script and requires it to stay
+    # inside this directory. The file here only delegates to AGENT_HOME.
     link = scripts / "expense-v2-poll.py"
     if link.is_symlink() or link.exists():
         link.unlink()
-    link.symlink_to(source)
+    link.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    link.chmod(source.stat().st_mode & 0o755)
     python = home / ".venv" / "bin" / "python"
     if not python.is_file():
         raise RuntimeError(f"missing {python}")
@@ -773,7 +776,7 @@ def install_cron() -> None:
             "expense-v2",
             "--no-agent",
             "--script",
-            str(link),
+            link.name,
             "--deliver",
             "local",
             "--interpreter",
@@ -782,9 +785,11 @@ def install_cron() -> None:
     )
     if job_id:
         command.extend(["--schedule", f"{minutes}m"])
-    result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
+    result = subprocess.run(command, capture_output=True, text=True, timeout=120)
     output = (result.stdout or "") + "\n" + (result.stderr or "")
     log(output.strip())
+    if result.returncode != 0:
+        raise RuntimeError(f"hermes cron failed ({result.returncode})")
     if not job_id:
         created = parse_created_job_id(output) or job_id_from_store("expense-v2")
         if not created:

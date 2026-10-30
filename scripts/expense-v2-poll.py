@@ -9,6 +9,13 @@ import sys
 from pathlib import Path
 
 os.environ.setdefault("ENV_FILE", "/etc/expense-agent-v2/env")
-agent = Path(__file__).resolve().parent.parent / "agent.py"
+home = ""
+for line in Path(os.environ["ENV_FILE"]).read_text(encoding="utf-8").splitlines():
+    if line.startswith("AGENT_HOME="):
+        home = line.split("=", 1)[1].strip().strip("'\"")
+        break
+if not home:
+    raise SystemExit("AGENT_HOME is empty")
+agent = Path(home) / "agent.py"
 sys.argv = [str(agent), "poll"]
 runpy.run_path(str(agent), run_name="__main__")
