@@ -118,6 +118,24 @@ class JobIdTests(unittest.TestCase):
             self.assertEqual(job_id_from_store("other", path), "")
 
 
+class CropTests(unittest.TestCase):
+    def test_rectangle_uses_the_longer_edges(self) -> None:
+        import numpy as np
+        from crop import _four_point_transform
+
+        image = np.full((220, 220, 3), 255, dtype=np.uint8)
+        quad = np.array([[20, 30], [120, 40], [150, 160], [10, 110]], dtype=np.float32)
+        warped = _four_point_transform(image, quad)
+        self.assertIsNotNone(warped)
+        assert warped is not None
+        top = float(np.linalg.norm(quad[1] - quad[0]))
+        bottom = float(np.linalg.norm(quad[2] - quad[3]))
+        left = float(np.linalg.norm(quad[3] - quad[0]))
+        right = float(np.linalg.norm(quad[2] - quad[1]))
+        self.assertEqual(warped.shape[1], int(max(top, bottom)))
+        self.assertEqual(warped.shape[0], int(max(left, right)))
+
+
 class VatTests(unittest.TestCase):
     def test_entertainment_vat_is_forced_to_zero(self) -> None:
         fields = {"journal": "Entertainment", "vat": 15.0}

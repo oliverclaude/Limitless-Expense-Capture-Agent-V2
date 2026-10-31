@@ -20,37 +20,42 @@ MIN_TEXT_SCORE = 6.0
 
 
 def straighten_slip_hybrid(path: Path) -> tuple[bytes | None, str]:
-    """OpenCV first; the local vision model if the crop looks clipped or the box hits the photo edges."""
-    opencv_jpeg, opencv_status = straighten_slip(path)
-    if not _needs_xai_corners(path, opencv_jpeg):
-        return opencv_jpeg, opencv_status
+    """The vision model picks the four corners. Those points are the crop.
+
+    The polygon is pulled into a rectangle: width is the longer horizontal
+    edge, height is the longer vertical edge, and everything outside is dropped.
+    If the model returns no corners, the OpenCV crop is used instead.
+    """
+    corners = _model_corners(path)
+    if corners:
+        image = _load_bgr(path)
+        if image is not None:
+            height, width = image.shape[:2]
+            quad = np.array([[x * width, y * height] for x, y in corners], dtype=np.float32)
+            jpeg = _warp_polygon(image, quad)
+            if jpeg is not None:
+                return jpeg, "warped (model)"
+    return straighten_slip(path)
+
+
+def _model_corners(path: Path) -> list[tuple[float, float]] | None:
     try:
         from extract import slip_corners
     except ImportError:
-        return opencv_jpeg, opencv_status
+        return None
     try:
-        corners = slip_corners(path)
-    except RuntimeError:
-        corners = None
-    if not corners:
-        if opencv_jpeg is not None:
-            return opencv_jpeg, opencv_status
-        return None, "failed (no slip rectangle)"
-    image = _load_bgr(path)
-    if image is None:
-        if opencv_jpeg is not None:
-            return opencv_jpeg, opencv_status
-        return None, "failed (unreadable image)"
-    h, w = image.shape[:2]
-    quad = np.array([[x * w, y * h] for x, y in corners], dtype=np.float32)
-    jpeg, status = _finish_from_quad(image, quad)
-    if jpeg is None:
-        return opencv_jpeg, opencv_status if opencv_jpeg is not None else (None, status)
-    if opencv_jpeg is not None and _ink_flush_to_side(_decode_jpeg(jpeg)) and not _ink_flush_to_side(
-        _decode_jpeg(opencv_jpeg)
-    ):
-        return opencv_jpeg, opencv_status
-    return jpeg, "warped (model)"
+        return slip_corners(path)
+    except (RuntimeError, OSError, TimeoutError):
+        return None
+
+
+def _warp_polygon(image: np.ndarray, quad: np.ndarray) -> bytes | None:
+    warped = _four_point_transform(image, quad)
+    if warped is None:
+        return None
+    warped = _flip_if_upside_down(warped)
+    warped = _light_contrast(warped)
+    return _encode_jpeg(warped)
 
 
 def _needs_xai_corners(path: Path, opencv_jpeg: bytes | None) -> bool:
@@ -532,6 +537,11 @@ def _order_points(pts: np.ndarray) -> np.ndarray:
 
 
 def _four_point_transform(image: np.ndarray, pts: np.ndarray) -> np.ndarray | None:
+    """Map the four-corner polygon onto a rectangle and drop the pixels outside it.
+
+    Width is the longer of the two horizontal edges. Height is the longer of
+    the two vertical edges.
+    """
     rect = _order_points(pts)
     if not _unique_pts(rect):
         return None
