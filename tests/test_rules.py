@@ -123,8 +123,8 @@ class CropTests(unittest.TestCase):
         import numpy as np
         from crop import _four_point_transform
 
-        image = np.full((220, 220, 3), 255, dtype=np.uint8)
-        quad = np.array([[20, 30], [120, 40], [150, 160], [10, 110]], dtype=np.float32)
+        image = np.full((500, 500, 3), 255, dtype=np.uint8)
+        quad = np.array([[40, 60], [240, 80], [300, 320], [20, 220]], dtype=np.float32)
         warped = _four_point_transform(image, quad)
         self.assertIsNotNone(warped)
         assert warped is not None
