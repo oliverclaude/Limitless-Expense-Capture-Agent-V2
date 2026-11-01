@@ -12,7 +12,18 @@ os.environ.setdefault("CLAIM_SUBJECT_PREFIX", "claimv2:")
 from extract import apply_decision, apply_vat_policy, comment_from_subject  # noqa: E402
 from mail import is_claim_subject  # noqa: E402
 from replies import coerce_duplicate_action, coerce_reply_action, parse_reply_command, parse_setting  # noqa: E402
-from settings import append_csv_value, job_id_from_store, parse_created_job_id, update_key  # noqa: E402
+from settings import (  # noqa: E402
+    append_csv_value,
+    apply_assignments,
+    display_value,
+    format_settings,
+    job_id_from_store,
+    normalize_value,
+    parse_created_job_id,
+    parse_settings_command,
+    read_env,
+    update_key,
+)
 
 
 class SubjectTests(unittest.TestCase):
@@ -116,6 +127,43 @@ class SettingTests(unittest.TestCase):
             self.assertTrue(append_csv_value(path, "JOURNALS", "Parking"))
             self.assertFalse(append_csv_value(path, "JOURNALS", "parking"))
             self.assertIn("JOURNALS=Parking", path.read_text(encoding="utf-8"))
+
+    def test_list_hides_secrets_and_updates_only_known_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "env"
+            path.write_text(
+                "IMAP_PASSWORD=secret\nHIGH_VALUE_ZAR=500\nNTFY_TOPIC=Fin-Limitless-V2\n",
+                encoding="utf-8",
+            )
+            shown = format_settings(read_env(path))
+            self.assertIn("IMAP_PASSWORD=(set)", shown)
+            self.assertNotIn("secret", shown)
+            self.assertIn("HIGH_VALUE_ZAR=500", shown)
+            self.assertEqual(display_value("OLLAMA_API_KEY", ""), "(empty)")
+            text = apply_assignments(path, [("HIGH_VALUE_ZAR", "800")])
+            self.assertIn("HIGH_VALUE_ZAR is now 800.", text)
+            self.assertIn("HIGH_VALUE_ZAR=800", path.read_text(encoding="utf-8"))
+            self.assertIn("IMAP_PASSWORD=secret", path.read_text(encoding="utf-8"))
+            with self.assertRaises(RuntimeError):
+                apply_assignments(path, [("NOT_A_SETTING", "1")])
+            self.assertNotIn("NOT_A_SETTING", path.read_text(encoding="utf-8"))
+            added = apply_assignments(path, [], ["Parking"])
+            self.assertIn("Added journal Parking.", added)
+            self.assertIn("JOURNALS=Parking", path.read_text(encoding="utf-8"))
+
+    def test_settings_command_parse_and_number_checks(self) -> None:
+        pairs, journals = parse_settings_command(
+            ["--set", "HIGH_VALUE_ZAR=800", "--add-journal", "Parking"]
+        )
+        self.assertEqual(pairs, [("HIGH_VALUE_ZAR", "800")])
+        self.assertEqual(journals, ["Parking"])
+        self.assertEqual(normalize_value("POLL_INTERVAL_MINUTES", "15"), "15")
+        with self.assertRaises(RuntimeError):
+            normalize_value("POLL_INTERVAL_MINUTES", "0")
+        with self.assertRaises(RuntimeError):
+            normalize_value("DELETE_COMPLETED_STATE", "yes")
+        with self.assertRaises(RuntimeError):
+            normalize_value("IMAP_PORT", "abc")
 
 
 class SheetTests(unittest.TestCase):

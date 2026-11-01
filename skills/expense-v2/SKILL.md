@@ -1,7 +1,7 @@
 ---
 name: expense-v2
-description: "Limitless expense claims on the Fin-Limitless-V2 chat. Use when the user replies about a waiting claim in ordinary words, approves it, rejects it, corrects a field, answers a duplicate, or changes the high-value amount, a journal, or how often mail is checked."
-version: 1.2.0
+description: "Limitless expense claims on the Fin-Limitless-V2 chat. Use when the user replies about a waiting claim in ordinary words, approves it, rejects it, corrects a field, answers a duplicate, asks for the current settings, or wants to change a setting."
+version: 1.3.0
 platforms: [linux]
 metadata:
   hermes:
@@ -14,7 +14,7 @@ The program does the work. You decide which command to run, then you stop talkin
 
 ## When to run it
 
-Run the command when the message is about a waiting claim or a setting.
+Run the reply command when the message is about a waiting claim.
 
 For a claim that is not a duplicate, you decide the action from the meaning of their words. No particular phrase is required. Do not rewrite what they said into ok, yes, or log.
 
@@ -32,9 +32,25 @@ For a duplicate, decide from the meaning as well. No particular sentence is requ
 - drop_new: they do not want the new claim.
 - ask: it is not one of those decisions.
 
-Also run it, with no `--action`, to change the high-value amount, add a journal by name, or set how many minutes between mail checks.
+## Settings
 
-For any other conversation, answer normally. Do not run the command.
+When they ask what the settings are, or to see them:
+
+```bash
+expense-v2 settings
+```
+
+When they want to change a setting, quote `KEY=value` as one argument. The key must already be in the env file. You can repeat `--set`. To add one journal without replacing the list, use `--add-journal`.
+
+```bash
+expense-v2 settings --set 'HIGH_VALUE_ZAR=800'
+expense-v2 settings --set 'POLL_INTERVAL_MINUTES=15'
+expense-v2 settings --add-journal 'Parking'
+```
+
+Do not pass `--action` for a settings request. Password, secret, token, and api key values come back as `(set)` or `(empty)`. Do not try to print the hidden value yourself.
+
+For any other conversation, answer normally. Do not run a command.
 
 ## Command
 

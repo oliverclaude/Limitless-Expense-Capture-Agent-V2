@@ -6,7 +6,7 @@ Version 1 is a separate program and a separate mailbox prefix (`claim:`). This r
 
 ## Program
 
-`agent.py` is the program. One run reads the env file and exits. `poll` takes the newest `claimv2:` message. `reply` applies a chat answer or a settings change. `install-cron` records the Hermes job. Run that last one by hand, once. The bot does not run it, and nothing here runs `sudo`.
+`agent.py` is the program. One run reads the env file and exits. `poll` takes the newest `claimv2:` message. `reply` applies a chat answer. `settings` lists the env file or changes a key that is already there. `install-cron` records the Hermes job. Run that last one by hand, once. The bot does not run it, and nothing here runs `sudo`.
 
 `mail.py` talks to the mailbox. It accepts a subject only when it starts with `claimv2:` (case is ignored), checks the sender and the body password, saves the photo or PDF, and files the message into processed, needs review, failed, or rejected.
 
@@ -24,9 +24,9 @@ Version 1 is a separate program and a separate mailbox prefix (`claim:`). This r
 
 `ntfy_out.py` sends the picture, then the words, on the version 2 topic. Both messages are tagged `hermes-agent` so the gateway does not treat them as a person typing.
 
-`replies.py` does not match the user's words. The chat agent passes `--action`. For a normal claim that is `confirm`, `skip`, `update`, or `ask`. For a duplicate it is `keep`, `remove_old`, `drop_new`, or `ask`. `ok` and `yes` are not a duplicate decision. `remove_old` means use the new line: the old sheet row and its proof files are deleted, then the new line is logged. The same file recognises a change to the high-value amount, a new journal, or the minutes between mail checks.
+`replies.py` does not match the user's words. The chat agent passes `--action`. For a normal claim that is `confirm`, `skip`, `update`, or `ask`. For a duplicate it is `keep`, `remove_old`, `drop_new`, or `ask`. `ok` and `yes` are not a duplicate decision. `remove_old` means use the new line: the old sheet row and its proof files are deleted, then the new line is logged. The same file still recognises a direct request to change the high-value amount, add a journal, or set the minutes between mail checks.
 
-`settings.py` writes one key in the env file. The interval is also changed on the Hermes job, and that schedule is changed before the file, so a failed edit cannot leave the file ahead of the job.
+`settings.py` reads and writes the env file. Chat can ask for every current setting, or set any key that is already there. Password, secret, token, and api key values are shown as `(set)` or `(empty)`, not the secret itself. The poll interval is changed on the Hermes job before the file, so a failed schedule edit cannot leave the file ahead of the job. Other keys are picked up on the next run. Nothing here restarts the gateway.
 
 ## How it is started
 
@@ -34,7 +34,7 @@ Version 1 is a separate program and a separate mailbox prefix (`claim:`). This r
 
 `scripts/expense-v2-poll.py` is the scheduled entry. Hermes will not run a symlink that points outside its scripts directory, so `install-cron` copies this file to `~/.hermes/scripts/` and the job runs that copy. The copy only starts `agent.py poll`.
 
-`skills/expense-v2/SKILL.md` is the Hermes skill. For a claim answer or a settings change it tells the model to run `expense-v2 reply` and then stop. The model does not send notifications, write the sheet, or run `poll`.
+`skills/expense-v2/SKILL.md` is the Hermes skill. For a claim answer it tells the model to run `expense-v2 reply`. To list or change settings it tells the model to run `expense-v2 settings`. The model does not send notifications, write the sheet, or run `poll`.
 
 ## Config and install
 

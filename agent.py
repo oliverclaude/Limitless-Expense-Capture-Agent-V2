@@ -47,9 +47,13 @@ from ntfy_out import send_claim
 from replies import coerce_duplicate_action, parse_reply_command, parse_setting
 from settings import (
     append_csv_value,
+    apply_assignments,
+    format_settings,
     hermes_bin,
     job_id_from_store,
     parse_created_job_id,
+    parse_settings_command,
+    read_env,
     read_job_id,
     set_cron_schedule,
     update_key,
@@ -793,6 +797,27 @@ def reply(text: str, action: str | None = None, overrides: dict[str, Any] | None
             pass
 
 
+def settings_command(argv: list[str]) -> None:
+    cfg = load_config()
+    path = Path(str(cfg["env_path"]))
+    try:
+        pairs, journals = parse_settings_command(argv)
+    except Exception as exc:
+        say(cfg, "Expense settings", f"Could not change that setting: {exc}")
+        return
+    waiting = claim_state.awaiting(Path(str(cfg["state_dir"])))
+    if not pairs and not journals:
+        message = format_settings(read_env(path))
+    else:
+        try:
+            message = apply_assignments(path, pairs, journals)
+        except Exception as exc:
+            message = f"Could not change that setting: {exc}"
+    if waiting:
+        message += "\n\nThe claim is still waiting for an answer."
+    say(cfg, "Expense settings", message)
+
+
 def install_cron() -> None:
     import subprocess
 
@@ -854,7 +879,7 @@ def install_cron() -> None:
 
 def main() -> None:
     if len(sys.argv) < 2 or sys.argv[1] in {"-h", "--help"}:
-        log("usage: agent.py poll | reply [--action confirm|skip|update|ask] [--merchant TEXT] [--comment TEXT] [--journal TEXT] [--claim-date DATE] [--personal N] [--company N] [--vat N] --text TEXT | install-cron")
+        log("usage: agent.py poll | reply [--action ACTION] [--merchant TEXT] [--comment TEXT] [--journal TEXT] [--claim-date DATE] [--personal N] [--company N] [--vat N] --text TEXT | settings [--set KEY=VALUE] [--add-journal NAME] | install-cron")
         sys.exit(2)
     command = sys.argv[1]
     try:
@@ -867,10 +892,12 @@ def main() -> None:
             elif command == "reply":
                 parsed = parse_reply_command(sys.argv[2:])
                 reply(parsed["text"], action=parsed.get("action"), overrides=parsed.get("overrides"))
+            elif command == "settings":
+                settings_command(sys.argv[2:])
             else:
                 raise RuntimeError(f"unknown command: {command}")
     except Busy:
-        if command == "reply":
+        if command in {"reply", "settings"}:
             try:
                 cfg = load_config()
                 say(cfg, "Expense agent", "Still working on the last check. Try again in a minute.")
