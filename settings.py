@@ -148,7 +148,7 @@ def apply_assignments(path: Path, pairs: list[tuple[str, str]], journals: list[s
     if "POLL_INTERVAL_MINUTES" in latest:
         lines.append("The next mail check uses that schedule.")
     if any(key in {"NTFY_URL", "NTFY_TOPIC"} for key in order):
-        lines.append("The program sends there. The gateway subscription was not changed.")
+        lines.append("The claim listener uses that on its next start. The assistant topic was not changed.")
     lines.append(format_settings(read_env(path)))
     return "\n".join(lines)
 

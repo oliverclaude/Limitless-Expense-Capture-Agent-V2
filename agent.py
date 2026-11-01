@@ -3,7 +3,10 @@
 
 poll: look for one claimv2: message. Prints nothing. Sends ntfy itself.
 reply: apply a chat reply or a settings change. Prints nothing. Sends ntfy itself.
+capture: the program takes one reply from the claim topic. Prints nothing. Sends ntfy itself.
+listen: read the claim topic and pass each reply to capture. Stays running.
 install-cron: record the scheduled job. Run once, by hand, not from the bot.
+install-listen: record the user service that runs listen. Run once, by hand.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ import fcntl
 import imaplib
 import os
 import sys
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Iterator
@@ -20,6 +24,7 @@ from typing import Any, Iterator
 import state as claim_state
 from done_mail import send_done_mail
 from extract import (
+    _post_chat,
     apply_decision,
     extract_claim,
     journals_from_env,
@@ -43,8 +48,8 @@ from mail import (
     sender_allowed,
     text_body,
 )
-from ntfy_out import send_claim
-from replies import coerce_duplicate_action, parse_reply_command, parse_setting
+from ntfy_out import CHAT_TOPIC, claim_reply_text, poll_messages, send_claim
+from replies import coerce_duplicate_action, interpret_reply, parse_reply_command, parse_setting
 from settings import (
     append_csv_value,
     apply_assignments,
@@ -172,11 +177,19 @@ def connect(cfg: dict[str, Any]) -> imaplib.IMAP4_SSL:
     return imap
 
 
-def say(cfg: dict[str, Any], title: str, message: str, image: Path | None = None) -> bool:
+def say(
+    cfg: dict[str, Any],
+    title: str,
+    message: str,
+    image: Path | None = None,
+    *,
+    topic: str | None = None,
+) -> bool:
+    """Claim messages use the expense topic. Pass topic for the assistant stream."""
     try:
         send_claim(
             str(cfg["ntfy_url"]),
-            str(cfg["ntfy_topic"]),
+            topic or str(cfg["ntfy_topic"]),
             title=title,
             message=message,
             image=image,
@@ -224,13 +237,18 @@ def format_existing(row: dict[str, Any]) -> str:
     )
 
 
+def who_it_is_for() -> str:
+    return f"Reply on this topic. Questions and settings go to {CHAT_TOPIC}."
+
+
 def duplicate_text(row: dict[str, Any], *, again: bool) -> str:
     lead = "That was not a decision on this duplicate.\n\n" if again else "This looks like a duplicate of an existing line.\n\n"
     return (
         lead
         + "Existing line:\n"
         + format_existing(row)
-        + "\n\nReply in your own words. You can keep both lines, use the new line instead of the old one, or drop the new one."
+        + "\n\nReply in your own words. You can keep both lines, use the new line instead of the old one, or drop the new one.\n\n"
+        + who_it_is_for()
     )
 
 
@@ -241,7 +259,8 @@ def review_text(fields: dict[str, Any], reasons: list[str]) -> str:
         + why
         + "\n\n"
         + format_fields(fields)
-        + "\n\nReply in your own words to log it, drop it, or correct a field."
+        + "\n\nReply in your own words to log it, drop it, or correct a field.\n\n"
+        + who_it_is_for()
     )
 
 
@@ -755,19 +774,19 @@ def reply(text: str, action: str | None = None, overrides: dict[str, Any] | None
         except Exception as exc:
             message = f"Could not change that setting: {exc}"
         if waiting:
-            message += " The claim is still waiting for an answer."
-        say(cfg, "Expense settings", message)
+            message += f" The claim is still waiting on {cfg['ntfy_topic']}."
+        say(cfg, "Expense settings", message, topic=CHAT_TOPIC)
         return
     if change is not None and action:
         try:
-            say(cfg, "Expense settings", apply_setting(cfg, change))
+            say(cfg, "Expense settings", apply_setting(cfg, change), topic=CHAT_TOPIC)
         except Exception as exc:
-            say(cfg, "Expense settings", f"Could not change that setting: {exc}")
+            say(cfg, "Expense settings", f"Could not change that setting: {exc}", topic=CHAT_TOPIC)
     if not waiting:
         say(
             cfg,
             "Expense agent",
-            "Nothing is waiting. Send a claimv2: email, or tell me a high-value amount, a journal to add, or how many minutes between checks.",
+            f"Nothing is waiting. Send a claimv2: email. Questions and settings go to {CHAT_TOPIC}.",
         )
         return
     if not (action or "").strip():
@@ -803,7 +822,7 @@ def settings_command(argv: list[str]) -> None:
     try:
         pairs, journals = parse_settings_command(argv)
     except Exception as exc:
-        say(cfg, "Expense settings", f"Could not change that setting: {exc}")
+        say(cfg, "Expense settings", f"Could not change that setting: {exc}", topic=CHAT_TOPIC)
         return
     waiting = claim_state.awaiting(Path(str(cfg["state_dir"])))
     if not pairs and not journals:
@@ -814,8 +833,107 @@ def settings_command(argv: list[str]) -> None:
         except Exception as exc:
             message = f"Could not change that setting: {exc}"
     if waiting:
-        message += "\n\nThe claim is still waiting for an answer."
-    say(cfg, "Expense settings", message)
+        message += f"\n\nThe claim is still waiting on {cfg['ntfy_topic']}."
+    say(cfg, "Expense settings", message, topic=CHAT_TOPIC)
+
+
+def capture(text: str) -> None:
+    """One reply from the claim topic. The model runs only to decide the waiting claim."""
+    cfg = load_config()
+    waiting = claim_state.awaiting(Path(str(cfg["state_dir"])))
+    if not waiting:
+        say(
+            cfg,
+            "Expense agent",
+            "Nothing is waiting. Send a claimv2: email. "
+            f"Questions and settings go to {CHAT_TOPIC}.",
+        )
+        return
+    say(cfg, "Capture program", "This reply is with the capture program, not the assistant.")
+    claim = waiting[0]
+    try:
+        decided = interpret_reply(text, claim, _post_chat)
+    except Exception as exc:
+        log(f"capture could not read the reply: {exc}")
+        say(cfg, "Capture program", "Could not read that reply. The claim is still waiting.")
+        return
+    imap = connect(cfg)
+    try:
+        apply_reply(cfg, imap, claim, text, decided["action"], decided.get("overrides"))
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+
+
+def capture_locked(text: str) -> None:
+    with exclusive():
+        capture(text)
+
+
+def listen() -> None:
+    """Follow the claim topic. The assistant is not subscribed to it."""
+    cfg = load_config()
+    root = Path(str(cfg["state_dir"]))
+    since = claim_state.load_cursor(root, claim_state.LISTEN_CURSOR_NAME)
+    if not since:
+        since = str(int(time.time()))
+        claim_state.save_cursor(root, since, claim_state.LISTEN_CURSOR_NAME)
+    log(f"listening for claim replies on {cfg['ntfy_topic']}")
+    while True:
+        try:
+            items = poll_messages(str(cfg["ntfy_url"]), str(cfg["ntfy_topic"]), since)
+        except Exception as exc:
+            log(f"listen poll failed: {exc}")
+            time.sleep(5)
+            continue
+        for item in items:
+            msg_id = str(item.get("id") or "")
+            if msg_id and msg_id == since:
+                continue
+            text = claim_reply_text(item)
+            if text:
+                try:
+                    capture_locked(text)
+                except Busy:
+                    log("listen busy")
+                    time.sleep(5)
+                    break
+                except Exception as exc:
+                    log(f"listen capture failed: {exc}")
+            if msg_id:
+                since = msg_id
+                claim_state.save_cursor(root, since, claim_state.LISTEN_CURSOR_NAME)
+        else:
+            time.sleep(2)
+            continue
+
+
+def install_listen() -> None:
+    """User service for the claim listener. No sudo. Does not touch the gateway unit."""
+    import subprocess
+
+    source = Path(__file__).resolve().parent / "templates" / "expense-v2-listen.service"
+    if not source.is_file():
+        raise RuntimeError(f"missing {source}")
+    unit_dir = Path.home() / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    target = unit_dir / "expense-v2-listen.service"
+    target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    env = os.environ.copy()
+    env["XDG_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    for args in (
+        ["systemctl", "--user", "daemon-reload"],
+        ["systemctl", "--user", "enable", "--now", "expense-v2-listen.service"],
+        ["systemctl", "--user", "restart", "expense-v2-listen.service"],
+    ):
+        result = subprocess.run(args, capture_output=True, text=True, env=env, timeout=60)
+        output = (result.stdout or "") + "\n" + (result.stderr or "")
+        if output.strip():
+            log(output.strip())
+        if result.returncode != 0:
+            raise RuntimeError(f"{' '.join(args)} failed ({result.returncode})")
 
 
 def install_cron() -> None:
@@ -879,12 +997,26 @@ def install_cron() -> None:
 
 def main() -> None:
     if len(sys.argv) < 2 or sys.argv[1] in {"-h", "--help"}:
-        log("usage: agent.py poll | reply [--action ACTION] [--merchant TEXT] [--comment TEXT] [--journal TEXT] [--claim-date DATE] [--personal N] [--company N] [--vat N] --text TEXT | settings [--set KEY=VALUE] [--add-journal NAME] | install-cron")
+        log(
+            "usage: agent.py poll | listen | reply [--action ACTION] [--merchant TEXT] "
+            "[--comment TEXT] [--journal TEXT] [--claim-date DATE] [--personal N] [--company N] "
+            "[--vat N] --text TEXT | capture --text TEXT | settings [--set KEY=VALUE] "
+            "[--add-journal NAME] | install-cron | install-listen"
+        )
         sys.exit(2)
     command = sys.argv[1]
     try:
         if command == "install-cron":
             install_cron()
+            return
+        if command == "install-listen":
+            install_listen()
+            return
+        if command == "listen":
+            listen()
+            return
+        if command == "capture":
+            capture_locked(parse_reply_command(sys.argv[2:])["text"])
             return
         with exclusive():
             if command == "poll":
@@ -897,10 +1029,15 @@ def main() -> None:
             else:
                 raise RuntimeError(f"unknown command: {command}")
     except Busy:
-        if command in {"reply", "settings"}:
+        if command in {"reply", "settings", "capture"}:
             try:
                 cfg = load_config()
-                say(cfg, "Expense agent", "Still working on the last check. Try again in a minute.")
+                say(
+                    cfg,
+                    "Expense agent",
+                    "Still working on the last check. Try again in a minute.",
+                    topic=CHAT_TOPIC if command == "settings" else None,
+                )
             except Exception as exc:
                 log(str(exc))
         else:

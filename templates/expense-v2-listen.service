@@ -1,0 +1,13 @@
+[Unit]
+Description=Expense v2 claim replies on Fin-Limitless-V2
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/expense-v2 listen
+Restart=always
+RestartSec=5
+WorkingDirectory=%h
+
+[Install]
+WantedBy=default.target

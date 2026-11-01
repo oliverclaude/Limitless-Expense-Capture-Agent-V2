@@ -23,12 +23,14 @@ The curl equivalent, which the program runs itself, is:
 
 from __future__ import annotations
 
+import json
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 ECHO_TAG = "hermes-agent"
+CHAT_TOPIC = "Fin-Limitless-V2-chat"
 
 
 def _header(value: str) -> str:
@@ -81,6 +83,55 @@ def send_image(base: str, topic: str, *, title: str, caption: str, image: Path) 
             "Message": _header(caption),
         },
     )
+
+
+def poll_messages(base: str, topic: str, since: str | None) -> list[dict]:
+    """Cached messages on the claim topic since a message id or unix time. No publish."""
+    if not base.strip() or not topic.strip():
+        raise RuntimeError("NTFY_URL or NTFY_TOPIC is empty")
+    query = {"poll": "1"}
+    if since:
+        query["since"] = since
+    request = urllib.request.Request(
+        _url(base, topic) + "/json?" + urllib.parse.urlencode(query),
+        method="GET",
+        headers={"Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"ntfy HTTP {exc.code}") from exc
+    except TimeoutError as exc:
+        raise RuntimeError("ntfy poll timed out") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError("ntfy poll failed") from exc
+    found: list[dict] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict) and item.get("event") == "message":
+            found.append(item)
+    return found
+
+
+def claim_reply_text(item: dict) -> str | None:
+    """The person's words, or None for an empty body or a message this program sent."""
+    tags = item.get("tags") or []
+    if isinstance(tags, str):
+        tags = [part.strip() for part in tags.split(",") if part.strip()]
+    if ECHO_TAG in tags:
+        return None
+    text = item.get("message") or ""
+    if not isinstance(text, str):
+        return None
+    text = text.strip()
+    return text or None
 
 
 def send_claim(base: str, topic: str, *, title: str, message: str, image: Path | None) -> None:

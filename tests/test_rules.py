@@ -11,7 +11,16 @@ os.environ.setdefault("CLAIM_SUBJECT_PREFIX", "claimv2:")
 
 from extract import apply_decision, apply_vat_policy, comment_from_subject  # noqa: E402
 from mail import is_claim_subject  # noqa: E402
-from replies import coerce_duplicate_action, coerce_reply_action, parse_reply_command, parse_setting  # noqa: E402
+from ntfy_out import claim_reply_text  # noqa: E402
+from replies import (  # noqa: E402
+    coerce_duplicate_action,
+    coerce_reply_action,
+    decision_prompt,
+    interpret_reply,
+    parse_decision,
+    parse_reply_command,
+    parse_setting,
+)
 from settings import (  # noqa: E402
     append_csv_value,
     apply_assignments,
@@ -269,6 +278,47 @@ class CropTests(unittest.TestCase):
         right = float(np.linalg.norm(quad[2] - quad[1]))
         self.assertEqual(warped.shape[1], int(max(top, bottom)))
         self.assertEqual(warped.shape[0], int(max(left, right)))
+
+
+class ListenTests(unittest.TestCase):
+    def test_own_messages_and_empty_bodies_are_not_replies(self) -> None:
+        self.assertIsNone(claim_reply_text({"event": "message", "message": "Logged.", "tags": ["hermes-agent"]}))
+        self.assertIsNone(claim_reply_text({"event": "message", "message": "   ", "tags": []}))
+        self.assertEqual(
+            claim_reply_text({"event": "message", "message": "Please continue", "tags": []}),
+            "Please continue",
+        )
+
+    def test_unreadable_model_output_does_not_log(self) -> None:
+        self.assertEqual(parse_decision("I think it is confirmed.", duplicate=False)["action"], "ask")
+        self.assertEqual(parse_decision("I think it is confirmed.", duplicate=False)["overrides"], {})
+        decided = parse_decision('{"action": "confirm"}', duplicate=True)
+        self.assertEqual(decided["action"], "ask")
+        self.assertEqual(decided["overrides"], {})
+
+    def test_model_json_keeps_only_named_fields(self) -> None:
+        raw = '<think>long</think>\n```json\n{"action": "update", "merchant": "Woolworths", "comment": null}\n```'
+        decided = parse_decision(raw, duplicate=False)
+        self.assertEqual(decided["action"], "update")
+        self.assertEqual(decided["overrides"], {"merchant": "Woolworths"})
+
+    def test_the_program_asks_the_model_instead_of_matching_words(self) -> None:
+        claim = {
+            "hold_kind": "high_value",
+            "reasons": ["amount R20 is over the high-value mark R10"],
+            "fields": {"merchant": "Cafe", "personal_amount": 20, "company_amount": 0},
+        }
+        seen: list[str] = []
+
+        def complete(prompt: str) -> str:
+            seen.append(prompt)
+            return '{"action": "confirm"}'
+
+        decided = interpret_reply("Please continue", claim, complete)
+        self.assertEqual(decided["action"], "confirm")
+        self.assertIn("Please continue", seen[0])
+        self.assertIn("Cafe", seen[0])
+        self.assertIn("confirm", decision_prompt("Please continue", claim))
 
 
 class VatTests(unittest.TestCase):

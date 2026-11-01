@@ -1,6 +1,6 @@
 # Install Hermes ntfy on limitlessfin
 
-This starts the Hermes gateway at boot and connects it to `Fin-Limitless-V2`.
+This starts the Hermes gateway at boot and connects it to `Fin-Limitless-V2-chat`. Claim replies stay on `Fin-Limitless-V2`.
 It does not replace the expense agent. Version 1 keeps running on `Fin-Limitless`.
 
 The gateway process runs as the account that owns `~/.hermes`, not root. The unit sets `User` and `Group` to that account. Below, that account is `${HERMES_USER}`.
@@ -10,7 +10,7 @@ Run these on limitlessfin as `${HERMES_USER}`, in this order.
 
 ## 1. Subscribe the phone
 
-In the ntfy app, on the server you set as `NTFY_SERVER_URL`, subscribe to `Fin-Limitless-V2`.
+In the ntfy app, on the server you set as `NTFY_SERVER_URL`, subscribe to `Fin-Limitless-V2` for claims and `Fin-Limitless-V2-chat` for the assistant.
 
 ## 2. Add the ntfy settings
 
@@ -60,9 +60,9 @@ systemd runs the Hermes launcher from `${HERMES_HOME}`:
 hermes gateway run
 ```
 
-as `${HERMES_USER}`, with `HERMES_HOME` set to that account's Hermes home (usually `~/.hermes`). That process loads `~/.hermes/.env` and `config.yaml`, subscribes to `Fin-Limitless-V2`, and ticks scheduled jobs every 60 seconds. There is no second expense process.
+as `${HERMES_USER}`, with `HERMES_HOME` set to that account's Hermes home (usually `~/.hermes`). That process loads `~/.hermes/.env` and `config.yaml`, subscribes to `Fin-Limitless-V2-chat`, and ticks scheduled jobs every 60 seconds. The claim listener is a separate user service. It is not a second copy of version 1.
 
-Send a message to `Fin-Limitless-V2` from the phone. The reply should come back on that topic. Version 1 should stay silent, because it is still on `Fin-Limitless`.
+Send a message to `Fin-Limitless-V2-chat` from the phone. The assistant should reply on that topic. A claim reply belongs on `Fin-Limitless-V2`. Version 1 should stay silent, because it is still on `Fin-Limitless`.
 
 ## 6. Install the expense program
 
@@ -84,4 +84,14 @@ Point `skills.external_dirs` in `~/.hermes/config.yaml` at `$AGENT_HOME/skills`.
 expense-v2 install-cron
 ```
 
-That creates one Hermes cron job named `expense-v2`, every `POLL_INTERVAL_MINUTES` (30), with no model in the job. The job's stdout stays empty. Pictures and words are sent by the program. A chat reply runs `expense-v2 reply`, not `poll`.
+That creates one Hermes cron job named `expense-v2`, every `POLL_INTERVAL_MINUTES` (30), with no model in the job. The job's stdout stays empty. Pictures and words are sent by the program on `Fin-Limitless-V2`. The job does not read chat. Claim replies are the listener in the next section. Settings are answered on `Fin-Limitless-V2-chat`.
+
+## 7. Listen for claim replies
+
+The assistant must not subscribe to `Fin-Limitless-V2`. This user service does. It does not poll the mailbox. Changing the gateway topic in `~/.hermes/.env` needs a gateway restart, which the bot does not do.
+
+```bash
+expense-v2 install-listen
+```
+
+That writes `~/.config/systemd/user/expense-v2-listen.service` and enables it. No sudo. After you change `NTFY_TOPIC` in `~/.hermes/.env` to `Fin-Limitless-V2-chat`, restart the gateway yourself so it leaves the claim topic.

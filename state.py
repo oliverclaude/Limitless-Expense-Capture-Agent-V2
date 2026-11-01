@@ -9,6 +9,7 @@ from typing import Any
 
 CURSOR_NAME = "ntfy-cursor.json"
 COMMAND_CURSOR_NAME = "ntfy-command-cursor.json"
+LISTEN_CURSOR_NAME = "ntfy-listen-cursor.json"
 
 
 def state_dir(path: Path) -> Path:
@@ -43,7 +44,13 @@ def iter_claims(root: Path) -> list[dict[str, Any]]:
     folder = state_dir(root)
     found: list[dict[str, Any]] = []
     for path in sorted(folder.glob("*.json")):
-        if path.name in {CURSOR_NAME, COMMAND_CURSOR_NAME, "prepaid.json", "xai-credit-alert.json"}:
+        if path.name in {
+            CURSOR_NAME,
+            COMMAND_CURSOR_NAME,
+            LISTEN_CURSOR_NAME,
+            "prepaid.json",
+            "xai-credit-alert.json",
+        }:
             continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
