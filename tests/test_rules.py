@@ -11,7 +11,7 @@ os.environ.setdefault("CLAIM_SUBJECT_PREFIX", "claimv2:")
 
 from extract import apply_decision, apply_vat_policy, comment_from_subject  # noqa: E402
 from mail import is_claim_subject  # noqa: E402
-from ntfy_out import claim_reply_text  # noqa: E402
+from ntfy_out import _message_from_line, claim_reply_text  # noqa: E402
 from replies import (  # noqa: E402
     coerce_duplicate_action,
     coerce_reply_action,
@@ -281,6 +281,14 @@ class CropTests(unittest.TestCase):
 
 
 class ListenTests(unittest.TestCase):
+    def test_a_stream_line_is_a_message_or_nothing(self) -> None:
+        self.assertIsNone(_message_from_line(""))
+        self.assertIsNone(_message_from_line('{"event": "open", "topic": "x"}'))
+        item = _message_from_line('{"event": "message", "message": "Please continue"}')
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item["message"], "Please continue")
+
     def test_own_messages_and_empty_bodies_are_not_replies(self) -> None:
         self.assertIsNone(claim_reply_text({"event": "message", "message": "Logged.", "tags": ["hermes-agent"]}))
         self.assertIsNone(claim_reply_text({"event": "message", "message": "   ", "tags": []}))

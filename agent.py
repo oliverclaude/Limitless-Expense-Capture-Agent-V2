@@ -48,7 +48,7 @@ from mail import (
     sender_allowed,
     text_body,
 )
-from ntfy_out import CHAT_TOPIC, claim_reply_text, poll_messages, send_claim
+from ntfy_out import CHAT_TOPIC, NtfyRateLimit, claim_reply_text, iter_messages, send_claim
 from replies import coerce_duplicate_action, interpret_reply, parse_reply_command, parse_setting
 from settings import (
     append_csv_value,
@@ -883,31 +883,32 @@ def listen() -> None:
     log(f"listening for claim replies on {cfg['ntfy_topic']}")
     while True:
         try:
-            items = poll_messages(str(cfg["ntfy_url"]), str(cfg["ntfy_topic"]), since)
+            for item in iter_messages(str(cfg["ntfy_url"]), str(cfg["ntfy_topic"]), since):
+                msg_id = str(item.get("id") or "")
+                if msg_id and msg_id == since:
+                    continue
+                text = claim_reply_text(item)
+                if text:
+                    try:
+                        capture_locked(text)
+                    except Busy:
+                        log("listen busy")
+                        time.sleep(5)
+                        break
+                    except Exception as exc:
+                        log(f"listen capture failed: {exc}")
+                if msg_id:
+                    since = msg_id
+                    claim_state.save_cursor(root, since, claim_state.LISTEN_CURSOR_NAME)
+        except NtfyRateLimit:
+            log("listen rate limited")
+            time.sleep(60)
+            continue
         except Exception as exc:
             log(f"listen poll failed: {exc}")
-            time.sleep(5)
+            time.sleep(15)
             continue
-        for item in items:
-            msg_id = str(item.get("id") or "")
-            if msg_id and msg_id == since:
-                continue
-            text = claim_reply_text(item)
-            if text:
-                try:
-                    capture_locked(text)
-                except Busy:
-                    log("listen busy")
-                    time.sleep(5)
-                    break
-                except Exception as exc:
-                    log(f"listen capture failed: {exc}")
-            if msg_id:
-                since = msg_id
-                claim_state.save_cursor(root, since, claim_state.LISTEN_CURSOR_NAME)
-        else:
-            time.sleep(2)
-            continue
+        time.sleep(10)
 
 
 def install_listen() -> None:

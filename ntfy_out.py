@@ -33,6 +33,10 @@ ECHO_TAG = "hermes-agent"
 CHAT_TOPIC = "Fin-Limitless-V2-chat"
 
 
+class NtfyRateLimit(RuntimeError):
+    """The server asked us to slow down. The caller waits before trying again."""
+
+
 def _header(value: str) -> str:
     return value.replace("\r", " ").replace("\n", " ").strip()
 
@@ -85,6 +89,52 @@ def send_image(base: str, topic: str, *, title: str, caption: str, image: Path) 
     )
 
 
+def _message_from_line(raw: str) -> dict | None:
+    line = raw.strip()
+    if not line:
+        return None
+    try:
+        item = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(item, dict) and item.get("event") == "message":
+        return item
+    return None
+
+
+def iter_messages(base: str, topic: str, since: str | None, *, idle_timeout: int = 60):
+    """One open subscription. Yields messages as they arrive. No repeated polling."""
+    if not base.strip() or not topic.strip():
+        raise RuntimeError("NTFY_URL or NTFY_TOPIC is empty")
+    query: dict[str, str] = {}
+    if since:
+        query["since"] = since
+    url = _url(base, topic) + "/json"
+    if query:
+        url += "?" + urllib.parse.urlencode(query)
+    request = urllib.request.Request(url, method="GET", headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=idle_timeout) as response:
+            while True:
+                try:
+                    raw = response.readline()
+                except TimeoutError:
+                    return
+                if not raw:
+                    return
+                item = _message_from_line(raw.decode("utf-8", errors="replace"))
+                if item is not None:
+                    yield item
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            raise NtfyRateLimit("ntfy HTTP 429") from exc
+        raise RuntimeError(f"ntfy HTTP {exc.code}") from exc
+    except TimeoutError:
+        return
+    except urllib.error.URLError as exc:
+        raise RuntimeError("ntfy poll failed") from exc
+
+
 def poll_messages(base: str, topic: str, since: str | None) -> list[dict]:
     """Cached messages on the claim topic since a message id or unix time. No publish."""
     if not base.strip() or not topic.strip():
@@ -101,6 +151,8 @@ def poll_messages(base: str, topic: str, since: str | None) -> list[dict]:
         with urllib.request.urlopen(request, timeout=30) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            raise NtfyRateLimit("ntfy HTTP 429") from exc
         raise RuntimeError(f"ntfy HTTP {exc.code}") from exc
     except TimeoutError as exc:
         raise RuntimeError("ntfy poll timed out") from exc
@@ -108,14 +160,8 @@ def poll_messages(base: str, topic: str, since: str | None) -> list[dict]:
         raise RuntimeError("ntfy poll failed") from exc
     found: list[dict] = []
     for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(item, dict) and item.get("event") == "message":
+        item = _message_from_line(line)
+        if item is not None:
             found.append(item)
     return found
 
