@@ -1,4 +1,4 @@
-"""Duplicate sentences stay exact. Logging or dropping any other claim is not decided here."""
+"""Chat decisions. The user's words are not matched here."""
 
 from __future__ import annotations
 
@@ -6,31 +6,15 @@ import re
 from typing import Any
 
 REPLY_ACTIONS = {"skip", "confirm", "update", "ask"}
-KEEP_BOTH = {"keep both"}
-REMOVE_OLD = {"remove the old one"}
-DROP_NEW = {
-    "don't capture the new one",
-    "dont capture the new one",
-    "do not capture the new one",
-}
+DUPLICATE_ACTIONS = {"keep", "remove_old", "drop_new", "ask"}
 
 
-def normalize(text: str) -> str:
-    compact = text.strip().lower().replace("\u2019", "'")
-    compact = re.sub(r"[.!?]+$", "", compact).strip()
-    return " ".join(compact.split())
-
-
-def duplicate_action(text: str) -> str | None:
-    """keep, remove_old, drop_new, or None when the reply is not one of the three sentences."""
-    compact = normalize(text)
-    if compact in KEEP_BOTH:
-        return "keep"
-    if compact in REMOVE_OLD:
-        return "remove_old"
-    if compact in DROP_NEW:
-        return "drop_new"
-    return None
+def coerce_duplicate_action(value: object) -> str:
+    """keep both, replace the old line, or drop the new one. Anything else asks again."""
+    action = str(value or "").strip().lower()
+    if action in DUPLICATE_ACTIONS:
+        return action
+    return "ask"
 
 
 def coerce_reply_action(value: object) -> str:

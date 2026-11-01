@@ -24,7 +24,7 @@ Version 1 is a separate program and a separate mailbox prefix (`claim:`). This r
 
 `ntfy_out.py` sends the picture, then the words, on the version 2 topic. Both messages are tagged `hermes-agent` so the gateway does not treat them as a person typing.
 
-`replies.py` matches only the duplicate sentences: "Keep both", "Remove the old one", and "Don't capture the new one". `ok` and `yes` are not a duplicate decision. Logging or dropping any other claim is not a phrase list. The chat agent reads the words and passes `--action confirm`, `skip`, `update`, or `ask`. The same file recognises a change to the high-value amount, a new journal, or the minutes between mail checks.
+`replies.py` does not match the user's words. The chat agent passes `--action`. For a normal claim that is `confirm`, `skip`, `update`, or `ask`. For a duplicate it is `keep`, `remove_old`, `drop_new`, or `ask`. `ok` and `yes` are not a duplicate decision. `remove_old` means use the new line: the old sheet row and its proof files are deleted, then the new line is logged. The same file recognises a change to the high-value amount, a new journal, or the minutes between mail checks.
 
 `settings.py` writes one key in the env file. The interval is also changed on the Hermes job, and that schedule is changed before the file, so a failed edit cannot leave the file ahead of the job.
 

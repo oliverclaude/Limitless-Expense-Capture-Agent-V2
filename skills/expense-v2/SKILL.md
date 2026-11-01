@@ -1,7 +1,7 @@
 ---
 name: expense-v2
 description: "Limitless expense claims on the Fin-Limitless-V2 chat. Use when the user replies about a waiting claim in ordinary words, approves it, rejects it, corrects a field, answers a duplicate, or changes the high-value amount, a journal, or how often mail is checked."
-version: 1.1.0
+version: 1.2.0
 platforms: [linux]
 metadata:
   hermes:
@@ -25,11 +25,12 @@ For a claim that is not a duplicate, you decide the action from the meaning of t
 
 "My half" means personal is half the spend and company is 0. Pass those two amounts with the action their words call for.
 
-A duplicate is different. Do not pass `--action`. Pass one of these sentences through unchanged, and no other wording:
+For a duplicate, decide from the meaning as well. No particular sentence is required. `ok` and `yes` alone are not a decision: use ask.
 
-- Keep both
-- Remove the old one
-- Don't capture the new one
+- keep: they want both lines.
+- remove_old: they want the new line instead of the old one. "Use the new line", "replace the old one", and "remove the old one" are remove_old. The program deletes the old sheet row and the old proof files, then logs the new line.
+- drop_new: they do not want the new claim.
+- ask: it is not one of those decisions.
 
 Also run it, with no `--action`, to change the high-value amount, add a journal by name, or set how many minutes between mail checks.
 
@@ -43,7 +44,9 @@ Put flags before `--text`. `--text` is their words, unchanged, and it is last. O
 expense-v2 reply --action confirm --text 'The claim is good to continue please.'
 expense-v2 reply --action skip --text 'Do not log this one.'
 expense-v2 reply --action update --merchant 'Woolworths' --text 'The merchant is Woolworths.'
-expense-v2 reply --text 'Keep both'
+expense-v2 reply --action keep --text 'Keep both of them.'
+expense-v2 reply --action remove_old --text 'Use the new line.'
+expense-v2 reply --action drop_new --text 'Do not capture the new one.'
 ```
 
 Field flags, only when they named a new value: `--merchant`, `--comment`, `--journal`, `--claim-date`, `--personal`, `--company`, `--vat`.
@@ -52,12 +55,12 @@ Field flags, only when they named a new value: `--merchant`, `--comment`, `--jou
 
 If the command exits 0, your entire final answer is exactly `[SILENT]`.
 
-If it prints that it needs `--action`, run it once more with confirm, skip, update, or ask. Do not answer `[SILENT]` on that failure. The claim was not saved.
+If it prints that it needs `--action`, run it once more with the action that matches their words. Do not answer `[SILENT]` on that failure. The claim was not saved.
 
 The program already sent the ntfy message when it exits 0. Do not repeat it. Do not send ntfy yourself. Do not invent a curl command. Do not run sudo. Do not run `expense-v2 poll`. The schedule does that.
 
 ## What you still do not do
 
-You do not choose a duplicate. The program only accepts the three sentences, and it asks again otherwise. You still answer `[SILENT]`.
+You choose the duplicate action as well. The program deletes the old line and its proof files only when you pass `remove_old`. You still answer `[SILENT]`.
 
 You do not write the spreadsheet, move mail, or delete proofs. The program does that.

@@ -44,7 +44,7 @@ from mail import (
     text_body,
 )
 from ntfy_out import send_claim
-from replies import duplicate_action, parse_reply_command, parse_setting
+from replies import coerce_duplicate_action, parse_reply_command, parse_setting
 from settings import (
     append_csv_value,
     hermes_bin,
@@ -221,14 +221,12 @@ def format_existing(row: dict[str, Any]) -> str:
 
 
 def duplicate_text(row: dict[str, Any], *, again: bool) -> str:
-    choices = "Keep both\nRemove the old one\nDon't capture the new one"
-    if again:
-        return "That was not one of the three sentences. Reply with only one of these:\n" + choices
+    lead = "That was not a decision on this duplicate.\n\n" if again else "This looks like a duplicate of an existing line.\n\n"
     return (
-        "This looks like a duplicate of an existing line.\n\nExisting line:\n"
+        lead
+        + "Existing line:\n"
         + format_existing(row)
-        + "\n\nReply with only one of these:\n"
-        + choices
+        + "\n\nReply in your own words. You can keep both lines, use the new line instead of the old one, or drop the new one."
     )
 
 
@@ -306,14 +304,26 @@ def write_sheet(fields: dict[str, Any], orig: Path) -> None:
     write_claim_row(month_sheet_path(orig.parent.parent), fields)
 
 
-def remove_old(fields: dict[str, Any], orig: Path, row: dict[str, Any]) -> None:
+def remove_old(fields: dict[str, Any], orig: Path, row: dict[str, Any]) -> str:
+    """Drop the old sheet row and its proof files. The new claim's files stay."""
     sheet = month_sheet_path(orig.parent.parent)
     proof = str(row.get("proof_file") or "")
-    delete_claim_row(sheet, proof)
-    keep = str(fields.get("proof_file") or "")
+    removed = delete_claim_row(sheet, proof)
+    keep = {
+        str(fields.get("proof_file") or ""),
+        orig.name,
+        scan_path_for(orig).name,
+    }
+    deleted: list[str] = []
     for path in proof_pair_paths(orig.parent, proof):
-        if path.is_file() and path.name != keep:
+        if path.is_file() and path.name not in keep:
             path.unlink()
+            deleted.append(path.name)
+    if removed:
+        return "Removed the old line from the sheet and deleted its proof files."
+    if deleted:
+        return "The old line was not on the sheet. Its proof files were deleted."
+    return "The old line was not on the sheet, and no proof files were found to delete."
 
 
 def save_originals(msg: Any, root: Path) -> list[Path]:
@@ -432,7 +442,7 @@ def major_failure(cfg: dict[str, Any], imap: imaplib.IMAP4 | None, mid: str, pat
     say(cfg, "Claim failed", failure_text(subject, reason))
 
 
-def finish_logged(cfg: dict[str, Any], imap: imaplib.IMAP4, claim: dict[str, Any]) -> None:
+def finish_logged(cfg: dict[str, Any], imap: imaplib.IMAP4, claim: dict[str, Any], note: str = "") -> None:
     fields = dict(claim.get("fields") or {})
     orig = Path(str(claim.get("orig_path") or ""))
     if orig.is_file():
@@ -451,7 +461,10 @@ def finish_logged(cfg: dict[str, Any], imap: imaplib.IMAP4, claim: dict[str, Any
         file_mail(imap, str(claim.get("message_id") or ""), str(cfg["folder_processed"]), cfg)
     except Exception as exc:
         log(f"file processed failed: {exc}")
-    say(cfg, "Claim logged", logged_text(fields, done_ok), image_of(claim))
+    message = logged_text(fields, done_ok)
+    if note:
+        message = note + "\n\n" + message
+    say(cfg, "Claim logged", message, image_of(claim))
 
 
 def finish_skipped(cfg: dict[str, Any], imap: imaplib.IMAP4, claim: dict[str, Any]) -> None:
@@ -616,8 +629,8 @@ def apply_reply(
     fields = dict(claim.get("fields") or {})
     journals = journals_from_env()
     if claim.get("hold_kind") == "duplicate":
-        action = duplicate_action(text)
-        if action is None:
+        chosen = coerce_duplicate_action(action)
+        if chosen == "ask":
             claim["ask_count"] = int(claim.get("ask_count") or 0) + 1
             claim["notified"] = False
             claim_state.save_claim(Path(str(cfg["state_dir"])), claim)
@@ -626,17 +639,20 @@ def apply_reply(
                 claim["notified"] = True
                 claim_state.save_claim(Path(str(cfg["state_dir"])), claim)
             return
-        if action == "drop_new":
+        if chosen == "drop_new":
             finish_skipped(cfg, imap, claim)
             return
-        if action == "remove_old":
+        note = ""
+        if chosen == "remove_old":
             orig = Path(str(claim.get("orig_path") or ""))
             if orig.is_file():
-                remove_old(fields, orig, dict(claim.get("duplicate") or {}))
+                note = remove_old(fields, orig, dict(claim.get("duplicate") or {}))
+            else:
+                note = "The new proof is missing, so the old line was left as it is."
         fields["needs_review"] = False
         fields["review_reasons"] = []
         claim["fields"] = fields
-        finish_logged(cfg, imap, claim)
+        finish_logged(cfg, imap, claim, note)
         return
 
     result = apply_decision(fields, journals, action, overrides, extra=text)
@@ -750,13 +766,22 @@ def reply(text: str, action: str | None = None, overrides: dict[str, Any] | None
             "Nothing is waiting. Send a claimv2: email, or tell me a high-value amount, a journal to add, or how many minutes between checks.",
         )
         return
-    if waiting[0].get("hold_kind") != "duplicate" and not (action or "").strip():
-        print(
-            "Need --action before --text. Use confirm when they want the claim logged, "
-            "skip when they do not, update when they only correct a field, "
-            "ask when it is not a decision. Judge the meaning. There is no required phrase.",
-            flush=True,
-        )
+    if not (action or "").strip():
+        if waiting[0].get("hold_kind") == "duplicate":
+            print(
+                "Need --action before --text. Use keep to log both lines, "
+                "remove_old to use the new line and delete the old line and its proof files, "
+                "drop_new to drop the new claim, or ask when it is not a decision. "
+                "ok and yes are not a decision. Judge the meaning.",
+                flush=True,
+            )
+        else:
+            print(
+                "Need --action before --text. Use confirm when they want the claim logged, "
+                "skip when they do not, update when they only correct a field, "
+                "ask when it is not a decision. Judge the meaning. There is no required phrase.",
+                flush=True,
+            )
         raise RuntimeError("reply needs --action")
     imap = connect(cfg)
     try:

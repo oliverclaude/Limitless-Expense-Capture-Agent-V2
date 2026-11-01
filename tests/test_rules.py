@@ -11,7 +11,7 @@ os.environ.setdefault("CLAIM_SUBJECT_PREFIX", "claimv2:")
 
 from extract import apply_decision, apply_vat_policy, comment_from_subject  # noqa: E402
 from mail import is_claim_subject  # noqa: E402
-from replies import coerce_reply_action, duplicate_action, parse_reply_command, parse_setting  # noqa: E402
+from replies import coerce_duplicate_action, coerce_reply_action, parse_reply_command, parse_setting  # noqa: E402
 from settings import append_csv_value, job_id_from_store, parse_created_job_id, update_key  # noqa: E402
 
 
@@ -30,15 +30,17 @@ class SubjectTests(unittest.TestCase):
 
 
 class ReplyTests(unittest.TestCase):
-    def test_duplicate_phrases(self) -> None:
-        self.assertEqual(duplicate_action("Keep both."), "keep")
-        self.assertEqual(duplicate_action("Remove the old one"), "remove_old")
-        self.assertEqual(duplicate_action("Don't capture the new one"), "drop_new")
-        self.assertEqual(duplicate_action("do not capture the new one"), "drop_new")
+    def test_duplicate_action_is_the_agents_choice(self) -> None:
+        self.assertEqual(coerce_duplicate_action("keep"), "keep")
+        self.assertEqual(coerce_duplicate_action("remove_old"), "remove_old")
+        self.assertEqual(coerce_duplicate_action("drop_new"), "drop_new")
+        self.assertEqual(coerce_duplicate_action("ask"), "ask")
 
     def test_yes_is_not_a_duplicate_decision(self) -> None:
-        self.assertIsNone(duplicate_action("yes"))
-        self.assertIsNone(duplicate_action("ok keep it"))
+        self.assertEqual(coerce_duplicate_action("yes"), "ask")
+        self.assertEqual(coerce_duplicate_action("ok"), "ask")
+        self.assertEqual(coerce_duplicate_action("confirm"), "ask")
+        self.assertEqual(coerce_duplicate_action(""), "ask")
 
     def test_unknown_model_action_is_not_a_log(self) -> None:
         self.assertEqual(coerce_reply_action("confirm"), "confirm")
@@ -139,6 +141,42 @@ class SheetTests(unittest.TestCase):
             self.assertEqual(found["comment"], "Lunch")
             self.assertTrue(delete_claim_row(sheet, "2026-10-02_Cafe_scan.jpg"))
             self.assertIsNone(find_duplicate(sheet, {**fields, "proof_file": "other.jpg"}))
+
+    def test_using_the_new_line_removes_the_old_row_and_proofs(self) -> None:
+        from agent import remove_old
+        from sheet import find_duplicate, write_claim_row
+
+        with tempfile.TemporaryDirectory() as tmp:
+            month = Path(tmp) / "2026-10"
+            proofs = month / "proofs"
+            proofs.mkdir(parents=True)
+            old_orig = proofs / "2026-10-02_Cafe_orig.jpg"
+            old_scan = proofs / "2026-10-02_Cafe_scan.jpg"
+            new_orig = proofs / "2026-10-02_Cafe_orig-2.jpg"
+            new_scan = proofs / "2026-10-02_Cafe_scan-2.jpg"
+            for path in (old_orig, old_scan, new_orig, new_scan):
+                path.write_bytes(b"x")
+            old = {
+                "claim_date": "2026-10-02",
+                "personal_amount": 120.0,
+                "company_amount": 0,
+                "vat": 0,
+                "comment": "Lunch",
+                "journal": "Entertainment",
+                "proof_file": old_scan.name,
+                "merchant": "Cafe",
+            }
+            write_claim_row(month / "2026-10-Expenses.xlsx", old)
+            fields = {**old, "proof_file": new_scan.name}
+            note = remove_old(fields, new_orig, {"proof_file": old_scan.name})
+            self.assertIn("Removed the old line", note)
+            self.assertFalse(old_orig.exists())
+            self.assertFalse(old_scan.exists())
+            self.assertTrue(new_orig.is_file())
+            self.assertTrue(new_scan.is_file())
+            self.assertIsNone(
+                find_duplicate(month / "2026-10-Expenses.xlsx", {**fields, "proof_file": "other.jpg"})
+            )
 
     def test_proof_pair_finds_the_other_extension(self) -> None:
         from sheet import proof_pair_paths
