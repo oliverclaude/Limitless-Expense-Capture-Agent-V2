@@ -9,9 +9,9 @@ from pathlib import Path
 
 os.environ.setdefault("CLAIM_SUBJECT_PREFIX", "claimv2:")
 
-from extract import apply_vat_policy, comment_from_subject  # noqa: E402
+from extract import apply_decision, apply_vat_policy, comment_from_subject  # noqa: E402
 from mail import is_claim_subject  # noqa: E402
-from replies import duplicate_action, parse_setting, simple_action  # noqa: E402
+from replies import coerce_reply_action, duplicate_action, parse_reply_command, parse_setting  # noqa: E402
 from settings import append_csv_value, job_id_from_store, parse_created_job_id, update_key  # noqa: E402
 
 
@@ -40,10 +40,59 @@ class ReplyTests(unittest.TestCase):
         self.assertIsNone(duplicate_action("yes"))
         self.assertIsNone(duplicate_action("ok keep it"))
 
-    def test_plain_confirm_and_skip(self) -> None:
-        self.assertEqual(simple_action("Yes"), "confirm")
-        self.assertEqual(simple_action("skip"), "skip")
-        self.assertIsNone(simple_action("Keep both"))
+    def test_unknown_model_action_is_not_a_log(self) -> None:
+        self.assertEqual(coerce_reply_action("confirm"), "confirm")
+        self.assertEqual(coerce_reply_action("skip"), "skip")
+        self.assertEqual(coerce_reply_action("update"), "update")
+        self.assertEqual(coerce_reply_action("ask"), "ask")
+        self.assertEqual(coerce_reply_action("yes"), "ask")
+        self.assertEqual(coerce_reply_action(""), "ask")
+
+    def test_reply_command_keeps_the_words_and_the_action(self) -> None:
+        parsed = parse_reply_command(
+            ["--action", "confirm", "--text", "The claim is good to continue please."]
+        )
+        self.assertEqual(parsed["action"], "confirm")
+        self.assertEqual(parsed["text"], "The claim is good to continue please.")
+        self.assertEqual(parsed["overrides"], {})
+
+    def test_reply_command_takes_only_named_fields(self) -> None:
+        parsed = parse_reply_command(
+            ["--action", "update", "--merchant", "Woolworths", "--text", "The merchant is Woolworths."]
+        )
+        self.assertEqual(parsed["overrides"], {"merchant": "Woolworths"})
+
+
+class DecisionTests(unittest.TestCase):
+    def test_confirm_clears_the_hold_without_a_phrase_list(self) -> None:
+        fields = {
+            "claim_date": "2026-10-31",
+            "personal_amount": 624.0,
+            "company_amount": 0.0,
+            "vat": 10.0,
+            "merchant": "Bootlegger Irene Link",
+            "comment": "Client Coffee",
+            "journal": "Entertainment",
+            "needs_review": True,
+            "review_reasons": ["waiting"],
+        }
+        result = apply_decision(fields, ["Entertainment", "Staff Welfare"], "confirm", {})
+        self.assertEqual(result["action"], "confirm")
+        self.assertFalse(result["fields"]["needs_review"])
+        self.assertEqual(result["fields"]["vat"], 0.0)
+        self.assertEqual(result["fields"]["personal_amount"], 624.0)
+
+    def test_unknown_action_does_not_change_the_claim(self) -> None:
+        fields = {
+            "claim_date": "2026-10-31",
+            "personal_amount": 624.0,
+            "company_amount": 0.0,
+            "merchant": "Bootlegger Irene Link",
+            "journal": "Entertainment",
+        }
+        result = apply_decision(fields, ["Entertainment"], "yes", {"merchant": "Other"})
+        self.assertEqual(result["action"], "ask")
+        self.assertEqual(result["fields"]["merchant"], "Bootlegger Irene Link")
 
 
 class SettingTests(unittest.TestCase):

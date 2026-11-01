@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from mail import subject_prefix
+from replies import coerce_reply_action
 
 
 def _csv_env(name: str, default: str = "") -> list[str]:
@@ -463,68 +464,33 @@ def extract_claim(
     return fields
 
 
-def interpret_reply(reply: str, fields: dict[str, Any], journals: list[str]) -> dict[str, Any]:
-    """Apply a free-text correction. Confirm and skip are decided before this is called."""
-    snapshot = {
-        "claim_date": fields.get("claim_date"),
-        "personal_amount": fields.get("personal_amount"),
-        "company_amount": fields.get("company_amount"),
-        "vat": fields.get("vat"),
-        "merchant": fields.get("merchant"),
-        "comment": fields.get("comment"),
-        "journal": fields.get("journal"),
-        "review_reasons": fields.get("review_reasons"),
-    }
-    prompt = f"""The operator replied in English about this expense claim. Return JSON only.
-
-Current claim:
-{json.dumps(snapshot, default=str)}
-
-Journals they may use: {", ".join(journals) or "(none)"}
-Staff Welfare = items for the office kitchen (groceries, rusks, tea, milk, kitchen/office cleaning supplies). Entertainment = client restaurant/cafe meals, not office kitchen stock.
-
-The operator may have sent several messages. Apply EVERY instruction in the text below.
-
-Operator reply:
-{reply}
-
-Decide action:
-- skip: they do not want this logged
-- confirm: log it after applying any field changes in the same text
-- update: they changed a field (merchant, half, journal, comment, amounts, date)
-
-JSON:
-{{
-  "action": "skip|confirm|update",
-  "claim_date": "YYYY-MM-DD or null",
-  "personal_amount": number or null,
-  "company_amount": number or null,
-  "vat": number or null,
-  "merchant": "string or null",
-  "comment": "string or null",
-  "journal": "string or null"
-}}
-Keep fields they did not change. "My half" means personal is half of the spend and company is 0.
-"""
-    parsed = _load_json(_post_chat(prompt))
-    action = str(parsed.get("action") or "update").lower()
-    if action not in ("skip", "confirm", "update"):
-        action = "update"
+def apply_decision(
+    fields: dict[str, Any],
+    journals: list[str],
+    action: object,
+    overrides: dict[str, Any] | None = None,
+    extra: str = "",
+) -> dict[str, Any]:
+    """Apply the chat agent's decision. The user's words are not matched here."""
+    chosen = coerce_reply_action(action)
+    if chosen in ("ask", "skip"):
+        return {"action": chosen, "fields": dict(fields)}
     merged = dict(fields)
-    if parsed.get("claim_date"):
-        merged["claim_date"] = str(parsed["claim_date"]).strip()
+    supplied = overrides or {}
+    if supplied.get("claim_date"):
+        merged["claim_date"] = str(supplied["claim_date"]).strip()
     for key in ("personal_amount", "company_amount", "vat"):
-        number = _as_number(parsed.get(key))
+        if key not in supplied:
+            continue
+        number = _as_number(supplied.get(key))
         if number is not None:
             merged[key] = number
-    if isinstance(parsed.get("merchant"), str) and parsed["merchant"].strip():
-        merged["merchant"] = parsed["merchant"].strip()
-    if isinstance(parsed.get("journal"), str) and parsed["journal"].strip():
-        merged["journal"] = parsed["journal"].strip()
-    if isinstance(parsed.get("comment"), str) and parsed["comment"].strip():
-        merged["comment"] = parsed["comment"].strip()
-    refresh_review(merged, journals, extra=reply)
-    if action == "confirm":
+    for key in ("merchant", "journal", "comment"):
+        value = supplied.get(key)
+        if isinstance(value, str) and value.strip():
+            merged[key] = value.strip()
+    refresh_review(merged, journals, extra=extra)
+    if chosen == "confirm":
         merged["needs_review"] = False
         merged["review_reasons"] = []
-    return {"action": action, "fields": merged}
+    return {"action": chosen, "fields": merged}

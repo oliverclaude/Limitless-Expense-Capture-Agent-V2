@@ -20,8 +20,8 @@ from typing import Any, Iterator
 import state as claim_state
 from done_mail import send_done_mail
 from extract import (
+    apply_decision,
     extract_claim,
-    interpret_reply,
     journals_from_env,
     notify_reasons,
 )
@@ -44,7 +44,7 @@ from mail import (
     text_body,
 )
 from ntfy_out import send_claim
-from replies import duplicate_action, parse_setting, simple_action
+from replies import duplicate_action, parse_reply_command, parse_setting
 from settings import (
     append_csv_value,
     hermes_bin,
@@ -239,7 +239,7 @@ def review_text(fields: dict[str, Any], reasons: list[str]) -> str:
         + why
         + "\n\n"
         + format_fields(fields)
-        + "\n\nReply ok to log it, or skip to drop it. You can also correct a field in English."
+        + "\n\nReply in your own words to log it, drop it, or correct a field."
     )
 
 
@@ -605,7 +605,14 @@ def process_message(cfg: dict[str, Any], imap: imaplib.IMAP4, msg: Any) -> None:
     hold(cfg, imap, claim, message)
 
 
-def apply_reply(cfg: dict[str, Any], imap: imaplib.IMAP4, claim: dict[str, Any], text: str) -> None:
+def apply_reply(
+    cfg: dict[str, Any],
+    imap: imaplib.IMAP4,
+    claim: dict[str, Any],
+    text: str,
+    action: str | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> None:
     fields = dict(claim.get("fields") or {})
     journals = journals_from_env()
     if claim.get("hold_kind") == "duplicate":
@@ -632,20 +639,26 @@ def apply_reply(cfg: dict[str, Any], imap: imaplib.IMAP4, claim: dict[str, Any],
         finish_logged(cfg, imap, claim)
         return
 
-    action = simple_action(text)
-    if action is None:
-        result = interpret_reply(text, fields, journals)
-        action = str(result["action"])
-        fields = dict(result["fields"])
-        claim["fields"] = fields
+    result = apply_decision(fields, journals, action, overrides, extra=text)
+    action = str(result["action"])
+    fields = dict(result["fields"])
+    claim["fields"] = fields
     if action == "skip":
         finish_skipped(cfg, imap, claim)
         return
-    if action == "update" and fields.get("needs_review"):
-        claim["reasons"] = list(fields.get("review_reasons") or ["needs a decision"])
+    if action == "ask" or (action == "update" and fields.get("needs_review")):
+        reasons = list(fields.get("review_reasons") or claim.get("reasons") or ["needs a decision"])
+        preface = ""
+        if action == "ask":
+            preface = "That was not a decision on this claim."
+            reasons = list(claim.get("reasons") or reasons)
+        claim["reasons"] = reasons
         claim["notified"] = False
         claim_state.save_claim(Path(str(cfg["state_dir"])), claim)
-        if say(cfg, "Claim needs you", review_text(fields, list(claim["reasons"])), image_of(claim)):
+        message = review_text(fields, reasons)
+        if preface:
+            message = preface + "\n\n" + message
+        if say(cfg, "Claim needs you", message, image_of(claim)):
             claim["notified"] = True
             claim_state.save_claim(Path(str(cfg["state_dir"])), claim)
         return
@@ -711,11 +724,12 @@ def poll() -> None:
                 pass
 
 
-def reply(text: str) -> None:
+def reply(text: str, action: str | None = None, overrides: dict[str, Any] | None = None) -> None:
     cfg = load_config()
     change = parse_setting(text)
     waiting = claim_state.awaiting(Path(str(cfg["state_dir"])))
-    if change is not None:
+    # A claim decision is not dropped just because the same sentence also changes a setting.
+    if change is not None and not action:
         try:
             message = apply_setting(cfg, change)
         except Exception as exc:
@@ -724,6 +738,11 @@ def reply(text: str) -> None:
             message += " The claim is still waiting for an answer."
         say(cfg, "Expense settings", message)
         return
+    if change is not None and action:
+        try:
+            say(cfg, "Expense settings", apply_setting(cfg, change))
+        except Exception as exc:
+            say(cfg, "Expense settings", f"Could not change that setting: {exc}")
     if not waiting:
         say(
             cfg,
@@ -731,9 +750,17 @@ def reply(text: str) -> None:
             "Nothing is waiting. Send a claimv2: email, or tell me a high-value amount, a journal to add, or how many minutes between checks.",
         )
         return
+    if waiting[0].get("hold_kind") != "duplicate" and not (action or "").strip():
+        print(
+            "Need --action before --text. Use confirm when they want the claim logged, "
+            "skip when they do not, update when they only correct a field, "
+            "ask when it is not a decision. Judge the meaning. There is no required phrase.",
+            flush=True,
+        )
+        raise RuntimeError("reply needs --action")
     imap = connect(cfg)
     try:
-        apply_reply(cfg, imap, waiting[0], text)
+        apply_reply(cfg, imap, waiting[0], text, action, overrides)
     finally:
         try:
             imap.logout()
@@ -802,7 +829,7 @@ def install_cron() -> None:
 
 def main() -> None:
     if len(sys.argv) < 2 or sys.argv[1] in {"-h", "--help"}:
-        log("usage: agent.py poll | reply --text TEXT | install-cron")
+        log("usage: agent.py poll | reply [--action confirm|skip|update|ask] [--merchant TEXT] [--comment TEXT] [--journal TEXT] [--claim-date DATE] [--personal N] [--company N] [--vat N] --text TEXT | install-cron")
         sys.exit(2)
     command = sys.argv[1]
     try:
@@ -813,9 +840,8 @@ def main() -> None:
             if command == "poll":
                 poll()
             elif command == "reply":
-                if "--text" not in sys.argv:
-                    raise RuntimeError("reply needs --text")
-                reply(" ".join(sys.argv[sys.argv.index("--text") + 1 :]).strip())
+                parsed = parse_reply_command(sys.argv[2:])
+                reply(parsed["text"], action=parsed.get("action"), overrides=parsed.get("overrides"))
             else:
                 raise RuntimeError(f"unknown command: {command}")
     except Busy:
