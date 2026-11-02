@@ -9,6 +9,7 @@ from pathlib import Path
 
 os.environ.setdefault("CLAIM_SUBJECT_PREFIX", "claimv2:")
 
+from debug_trace import debug_topic, describe_prompt, publish_debug, redact, split_thinking  # noqa: E402
 from extract import apply_decision, apply_vat_policy, comment_from_subject  # noqa: E402
 from mail import is_claim_subject  # noqa: E402
 from ntfy_out import _message_from_line, claim_reply_text  # noqa: E402
@@ -173,6 +174,9 @@ class SettingTests(unittest.TestCase):
             normalize_value("DELETE_COMPLETED_STATE", "yes")
         with self.assertRaises(RuntimeError):
             normalize_value("IMAP_PORT", "abc")
+        self.assertEqual(normalize_value("DEBUG_NTFY", "1"), "1")
+        with self.assertRaises(RuntimeError):
+            normalize_value("DEBUG_NTFY", "yes")
 
 
 class SheetTests(unittest.TestCase):
@@ -327,6 +331,65 @@ class ListenTests(unittest.TestCase):
         self.assertIn("Please continue", seen[0])
         self.assertIn("Cafe", seen[0])
         self.assertIn("confirm", decision_prompt("Please continue", claim))
+
+
+class DebugTests(unittest.TestCase):
+    def test_topic_name_adds_debug_once(self) -> None:
+        self.assertEqual(debug_topic("Fin-Limitless-V2"), "Fin-Limitless-V2-debug")
+        self.assertEqual(debug_topic("Fin-Limitless-V2-debug"), "Fin-Limitless-V2-debug")
+        self.assertEqual(debug_topic("  "), "")
+
+    def test_thinking_is_split_from_the_answer(self) -> None:
+        thinking, visible = split_thinking("<think>because</think>\n{\"action\": \"confirm\"}")
+        self.assertEqual(thinking, "because")
+        self.assertIn("confirm", visible)
+
+    def test_prompt_text_counts_images_without_copying_them(self) -> None:
+        text = describe_prompt(
+            [
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}},
+                {"type": "text", "text": "read the slip"},
+            ]
+        )
+        self.assertIn("1 image", text)
+        self.assertIn("read the slip", text)
+        self.assertNotIn("AAAA", text)
+
+    def test_off_sends_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "env"
+            path.write_text("DEBUG_NTFY=0\nNTFY_URL=http://notify.example\nNTFY_TOPIC=Fin-Limitless-V2\n", encoding="utf-8")
+            sent: list[tuple[str, str, str]] = []
+
+            def sender(base: str, topic: str, *, title: str, message: str) -> None:
+                sent.append((base, topic, message))
+
+            self.assertFalse(publish_debug("Assistant thinking", "secret", env_path=path, sender=sender))
+            self.assertEqual(sent, [])
+
+    def test_on_redacts_secrets_and_the_server(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "env"
+            path.write_text(
+                "DEBUG_NTFY=1\nNTFY_URL=http://notify.example\nNTFY_TOPIC=Fin-Limitless-V2\n"
+                "OLLAMA_API_KEY=supersecretvalue\n",
+                encoding="utf-8",
+            )
+            sent: list[tuple[str, str, str]] = []
+
+            def sender(base: str, topic: str, *, title: str, message: str) -> None:
+                sent.append((topic, title, message))
+
+            body = "IMAP_PASSWORD=hunter2\nsee http://notify.example/topic and https://example.com/ok supersecretvalue"
+            self.assertTrue(publish_debug("Tool result: terminal", body, env_path=path, sender=sender))
+            self.assertEqual(sent[0][0], "Fin-Limitless-V2-debug")
+            self.assertEqual(sent[0][1], "Tool result: terminal")
+            self.assertIn("IMAP_PASSWORD=(hidden)", sent[0][2])
+            self.assertNotIn("hunter2", sent[0][2])
+            self.assertNotIn("notify.example", sent[0][2])
+            self.assertIn("https://example.com/ok", sent[0][2])
+            self.assertNotIn("supersecretvalue", sent[0][2])
+            self.assertIn("[url omitted]", redact("http://notify.example/x", hosts=["notify.example"], hidden_values=[]))
 
 
 class VatTests(unittest.TestCase):

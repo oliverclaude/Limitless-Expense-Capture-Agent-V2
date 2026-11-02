@@ -1,0 +1,10 @@
+name: expense-v2-debug
+version: "1.0.0"
+description: "When DEBUG_NTFY=1, publish tool calls, thinking, and model replies to the claim topic plus -debug. Does not decide a claim and does not block a tool."
+author: local
+provides_hooks:
+  - pre_tool_call
+  - post_tool_call
+  - on_stream_start
+  - on_stream_delta
+  - on_stream_end

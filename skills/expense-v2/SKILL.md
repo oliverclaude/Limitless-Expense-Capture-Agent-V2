@@ -1,7 +1,7 @@
 ---
 name: expense-v2
 description: "General chat on Fin-Limitless-V2-chat. Use when the user asks for the current expense settings or wants to change a setting. Claim replies are not on this topic."
-version: 1.5.0
+version: 1.6.0
 platforms: [linux]
 metadata:
   hermes:
@@ -29,6 +29,15 @@ expense-v2 settings --set 'HIGH_VALUE_ZAR=800'
 expense-v2 settings --set 'POLL_INTERVAL_MINUTES=15'
 expense-v2 settings --add-journal 'Parking'
 ```
+
+When they want the debug stream on or off, set `DEBUG_NTFY` to `1` or `0`.
+
+```bash
+expense-v2 settings --set 'DEBUG_NTFY=1'
+expense-v2 settings --set 'DEBUG_NTFY=0'
+```
+
+`1` sends tool calls, thinking, and model output to the claim topic name with `-debug` added. `0` stops that. Do not print the trace yourself.
 
 Password, secret, token, and api key values come back as `(set)` or `(empty)`. Do not try to print the hidden value yourself.
 

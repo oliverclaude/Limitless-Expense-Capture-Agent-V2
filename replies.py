@@ -216,7 +216,10 @@ def parse_decision(raw: str, *, duplicate: bool) -> dict[str, Any]:
 
 def interpret_reply(text: str, claim: dict[str, Any], complete: Callable[[str], str]) -> dict[str, Any]:
     """One model call. complete(prompt) returns the model text. No phrase list."""
-    raw = complete(decision_prompt(text, claim))
+    from debug_trace import model_purpose
+
+    with model_purpose("claim reply"):
+        raw = complete(decision_prompt(text, claim))
     if not isinstance(raw, str):
         raw = str(raw or "")
     return parse_decision(raw, duplicate=claim.get("hold_kind") == "duplicate")

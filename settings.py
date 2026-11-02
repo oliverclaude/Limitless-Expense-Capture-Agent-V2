@@ -81,6 +81,10 @@ def normalize_value(key: str, value: str) -> str:
             if value not in {"0", "1"}:
                 raise RuntimeError("DELETE_COMPLETED_STATE must be 0 or 1")
             return value
+        if key == "DEBUG_NTFY":
+            if value not in {"0", "1"}:
+                raise RuntimeError("DEBUG_NTFY must be 0 or 1")
+            return value
         if key in {"IMAP_PORT", "SMTP_PORT", "OLLAMA_TIMEOUT_SECONDS", "STATE_RETENTION_DAYS"}:
             number = int(value)
             if number < 0:
@@ -147,8 +151,16 @@ def apply_assignments(path: Path, pairs: list[tuple[str, str]], journals: list[s
             lines.append(f"Journal {name} is already on the list.")
     if "POLL_INTERVAL_MINUTES" in latest:
         lines.append("The next mail check uses that schedule.")
+    if "DEBUG_NTFY" in latest:
+        if latest["DEBUG_NTFY"] == "1":
+            lines.append("Debug notes go to the claim topic plus -debug.")
+        else:
+            lines.append("Debug notes are off.")
     if any(key in {"NTFY_URL", "NTFY_TOPIC"} for key in order):
-        lines.append("The claim listener uses that on its next start. The assistant topic was not changed.")
+        lines.append(
+            "The claim listener uses that on its next start. The assistant topic was not changed. "
+            "Debug notes use the claim topic plus -debug."
+        )
     lines.append(format_settings(read_env(path)))
     return "\n".join(lines)
 

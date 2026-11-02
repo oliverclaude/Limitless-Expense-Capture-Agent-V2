@@ -224,6 +224,8 @@ def _timeout() -> int:
 
 
 def _post_chat(content: list[dict[str, Any]] | str) -> str:
+    from debug_trace import note_model_failure, note_model_start
+
     payload = {
         "model": _model_name(),
         "temperature": 0.1,
@@ -239,15 +241,43 @@ def _post_chat(content: list[dict[str, Any]] | str) -> str:
             "Content-Type": "application/json",
         },
     )
+    note_model_start(content)
     try:
         with urllib.request.urlopen(request, timeout=_timeout()) as response:
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:800]
+        note_model_failure(RuntimeError(f"model HTTP {exc.code}: {detail}"))
         raise RuntimeError(f"model HTTP {exc.code}: {detail}") from exc
     except TimeoutError as exc:
+        note_model_failure(exc)
         raise RuntimeError("model timed out") from exc
+    except Exception as exc:
+        note_model_failure(exc)
+        raise
+    _publish_model_trace(data)
     return _message_text(data)
+
+
+def _publish_model_trace(data: dict[str, Any]) -> None:
+    from debug_trace import note_model_result
+
+    try:
+        choices = data.get("choices") or []
+        message = choices[0].get("message") or {} if choices and isinstance(choices[0], dict) else {}
+        content = message.get("content") or ""
+        if isinstance(content, list):
+            content = "\n".join(
+                part.get("text", "") for part in content if isinstance(part, dict) and isinstance(part.get("text"), str)
+            )
+        if not isinstance(content, str):
+            content = str(content)
+        extra = message.get("reasoning") or message.get("reasoning_content") or ""
+        if not isinstance(extra, str):
+            extra = str(extra or "")
+        note_model_result(content, extra)
+    except Exception:
+        return
 
 
 def _message_text(data: dict[str, Any]) -> str:
@@ -410,7 +440,10 @@ Order: top-left, top-right, bottom-right, bottom-left of the paper rectangle in 
 {"tl": [x, y], "tr": [x, y], "br": [x, y], "bl": [x, y]}
 """
     try:
-        text = _post_chat([_image_part(path), {"type": "text", "text": prompt}])
+        from debug_trace import model_purpose
+
+        with model_purpose("crop"):
+            text = _post_chat([_image_part(path), {"type": "text", "text": prompt}])
         parsed = _load_json(text)
     except (RuntimeError, OSError, TimeoutError):
         return None
@@ -457,7 +490,10 @@ def extract_claim(
     if not content and not pdf_text.strip():
         raise RuntimeError("nothing to extract (no image or PDF text)")
     content.append({"type": "text", "text": _prompt(subject, body, journals, vat_journals, pdf_text)})
-    text = _post_chat(content)
+    from debug_trace import model_purpose
+
+    with model_purpose("slip"):
+        text = _post_chat(content)
     fields = _parse_fields(text, journals, subject)
     apply_vat_policy(fields, vat_journals)
     fields["proof_file"] = proof_name

@@ -22,7 +22,7 @@ Version 1 is a separate program and a separate mailbox prefix (`claim:`). This r
 
 `done_mail.py` sends the Done or Skipped email to the work address in the env file. It does not reply to whatever address was on the claim.
 
-`ntfy_out.py` sends the picture, then the words, on `Fin-Limitless-V2`. Both messages are tagged `hermes-agent` so the claim listener does not treat them as a person typing. The assistant topic name is `Fin-Limitless-V2-chat`.
+`ntfy_out.py` sends the picture, then the words, on `Fin-Limitless-V2`. Both messages are tagged `hermes-agent` so the claim listener does not treat them as a person typing. The assistant topic name is `Fin-Limitless-V2-chat`. When `DEBUG_NTFY=1`, `debug_trace.py` also publishes tool calls, thinking, and model replies on `Fin-Limitless-V2-debug`. The assistant does not listen there. `0` turns that off. The flag is read from the env file each time, so the listener does not need a restart.
 
 `replies.py` does not match the user's words. The claim listener asks the local model for the action. For a normal claim that is `confirm`, `skip`, `update`, or `ask`. For a duplicate it is `keep`, `remove_old`, `drop_new`, or `ask`. `ok` and `yes` are not a duplicate decision. `remove_old` means use the new line: the old sheet row and its proof files are deleted, then the new line is logged.
 
