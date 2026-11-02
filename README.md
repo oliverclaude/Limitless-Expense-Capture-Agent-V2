@@ -34,7 +34,7 @@ Version 1 is a separate program and a separate mailbox prefix (`claim:`). This r
 
 `scripts/expense-v2-poll.py` is the scheduled entry. Hermes will not run a symlink that points outside its scripts directory, so `install-cron` copies this file to `~/.hermes/scripts/` and the job runs that copy. The copy only starts `agent.py poll`.
 
-`skills/expense-v2/SKILL.md` is the Hermes skill for `Fin-Limitless-V2-chat`. A question about a current setting, including whether debug is on, is answered from the text `expense-v2 settings` prints. It does not decide a claim.
+`skills/expense-v2/SKILL.md` is the Hermes skill for `Fin-Limitless-V2-chat`. Helping with expense capture is its primary job. `skills.auto_load` puts that skill in every chat session, so the job is not limited to turns where the model chooses to open it. A question about a current setting, including whether debug is on, is answered from the text `expense-v2 settings` prints. It does not decide a claim.
 
 `templates/expense-v2-listen.service` is the user service that runs `expense-v2 listen`. It reads `Fin-Limitless-V2` only. `install-listen` enables it for the gateway user. It does not use sudo, and it does not touch version 1 or the gateway unit.
 

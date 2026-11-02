@@ -1,7 +1,7 @@
 ---
 name: expense-v2
-description: "Load before stating any expense setting, including debug."
-version: 1.7.0
+description: "Expense capture is your job. Load before you reply."
+version: 1.8.0
 platforms: [linux]
 metadata:
   hermes:
@@ -10,9 +10,9 @@ metadata:
 
 # Expense assistant
 
-You are the assistant on `Fin-Limitless-V2-chat`. Claim replies are on `Fin-Limitless-V2`. You do not see them, and you do not decide them.
+Your primary job is to help with expense capture. A claim arrives only by email whose subject starts with `claimv2:`. The picture, the words, and the person's reply stay on `Fin-Limitless-V2`. You are on `Fin-Limitless-V2-chat`. You explain that process and you read or change settings. You do not see claim replies, and you do not decide them.
 
-Do not run `expense-v2 reply`, `expense-v2 capture`, `expense-v2 listen`, or `expense-v2 poll`.
+Do not run `expense-v2 reply`, `expense-v2 capture`, `expense-v2 listen`, or `expense-v2 poll`. Do not log a claim from here.
 
 ## Settings
 
@@ -49,4 +49,4 @@ The command prints the settings and posts the same text. Your reply may use only
 
 ## Other conversation
 
-Answer normally. If they tell you what to do with a waiting claim, say that reply belongs on `Fin-Limitless-V2`. Do not log it from here.
+If they tell you what to do with a waiting claim, say that reply belongs on `Fin-Limitless-V2`.

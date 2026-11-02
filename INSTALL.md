@@ -78,7 +78,7 @@ ln -sfn "$AGENT_HOME/bin/expense-v2" "$HOME/.local/bin/expense-v2"
 
 `$AGENT_HOME` is this checkout. Put that path in `/etc/expense-agent-v2/env` as `AGENT_HOME`. On that same file, set `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, and `OLLAMA_API_KEY` to the local model Hermes already uses. Leave the server address out of git.
 
-Point `skills.external_dirs` in `~/.hermes/config.yaml` at `$AGENT_HOME/skills`. Then record the mail job once:
+Point `skills.external_dirs` in `~/.hermes/config.yaml` at `$AGENT_HOME/skills`. Set `skills.auto_load` to a list containing `expense-v2`, so that skill is in every chat session. Restart the gateway after that change. A chat session that already has a stored prompt keeps the old prompt until that stored prompt is cleared, or until the session is new. Then record the mail job once:
 
 ```bash
 expense-v2 install-cron
