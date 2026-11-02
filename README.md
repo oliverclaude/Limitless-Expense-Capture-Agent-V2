@@ -6,7 +6,7 @@ Version 1 is a separate program and a separate mailbox prefix (`claim:`). This r
 
 ## Program
 
-`agent.py` is the program. `poll` takes the newest `claimv2:` message and exits. `listen` stays running, reads replies on `Fin-Limitless-V2`, and passes each one to `capture`. `settings` lists the env file or changes a key that is already there, and that answer is sent on `Fin-Limitless-V2-chat`. `reply` remains as a manual command. The assistant does not use it. `install-cron` and `install-listen` are run by hand, once. The bot does not run them, and nothing here runs `sudo`.
+`agent.py` is the program. `poll` takes the newest `claimv2:` message and exits. `listen` stays running, reads replies on `Fin-Limitless-V2`, and passes each one to `capture`. `settings` lists the env file or changes a key that is already there. It prints that answer and sends the same text on `Fin-Limitless-V2-chat`. `reply` remains as a manual command. The assistant does not use it. `install-cron` and `install-listen` are run by hand, once. The bot does not run them, and nothing here runs `sudo`.
 
 `mail.py` talks to the mailbox. It accepts a subject only when it starts with `claimv2:` (case is ignored), checks the sender and the body password, saves the photo or PDF, and files the message into processed, needs review, failed, or rejected.
 
@@ -34,7 +34,7 @@ Version 1 is a separate program and a separate mailbox prefix (`claim:`). This r
 
 `scripts/expense-v2-poll.py` is the scheduled entry. Hermes will not run a symlink that points outside its scripts directory, so `install-cron` copies this file to `~/.hermes/scripts/` and the job runs that copy. The copy only starts `agent.py poll`.
 
-`skills/expense-v2/SKILL.md` is the Hermes skill for `Fin-Limitless-V2-chat`. It tells the model to run `expense-v2 settings` for a settings request, and to answer other conversation normally. It does not decide a claim.
+`skills/expense-v2/SKILL.md` is the Hermes skill for `Fin-Limitless-V2-chat`. A question about a current setting, including whether debug is on, is answered from the text `expense-v2 settings` prints. It does not decide a claim.
 
 `templates/expense-v2-listen.service` is the user service that runs `expense-v2 listen`. It reads `Fin-Limitless-V2` only. `install-listen` enables it for the gateway user. It does not use sudo, and it does not touch version 1 or the gateway unit.
 

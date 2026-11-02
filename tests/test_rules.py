@@ -178,6 +178,53 @@ class SettingTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             normalize_value("DEBUG_NTFY", "yes")
 
+    def test_settings_command_prints_the_live_list(self) -> None:
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        import agent
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / "env"
+            env.write_text(
+                "IMAP_HOST=imap.example\nIMAP_USER=user\nIMAP_PASSWORD=secret\n"
+                "DEBUG_NTFY=1\nNTFY_TOPIC=Fin-Limitless-V2\n",
+                encoding="utf-8",
+            )
+            keys = [
+                "ENV_FILE",
+                "IMAP_HOST",
+                "IMAP_USER",
+                "IMAP_PASSWORD",
+                "DEBUG_NTFY",
+                "NTFY_TOPIC",
+                "AGENT_STATE_DIR",
+                "NTFY_URL",
+            ]
+            saved = {key: os.environ.get(key) for key in keys}
+            for key in keys:
+                os.environ.pop(key, None)
+            os.environ["ENV_FILE"] = str(env)
+            os.environ["AGENT_STATE_DIR"] = str(Path(tmp) / "state")
+            try:
+                buffer = io.StringIO()
+                with mock.patch.object(agent, "say", return_value=True) as say:
+                    with redirect_stdout(buffer):
+                        agent.settings_command([])
+                text = buffer.getvalue()
+                self.assertIn("DEBUG_NTFY=1", text)
+                self.assertNotIn("secret", text)
+                say.assert_called_once()
+                self.assertEqual(say.call_args.kwargs["topic"], "Fin-Limitless-V2-chat")
+                self.assertIn("DEBUG_NTFY=1", say.call_args.args[2])
+            finally:
+                for key, value in saved.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
 
 class SheetTests(unittest.TestCase):
     def test_duplicate_and_delete_row(self) -> None:

@@ -1,7 +1,7 @@
 ---
 name: expense-v2
-description: "General chat on Fin-Limitless-V2-chat. Use when the user asks for the current expense settings or wants to change a setting. Claim replies are not on this topic."
-version: 1.6.0
+description: "Load before stating any expense setting, including debug."
+version: 1.7.0
 platforms: [linux]
 metadata:
   hermes:
@@ -16,7 +16,9 @@ Do not run `expense-v2 reply`, `expense-v2 capture`, `expense-v2 listen`, or `ex
 
 ## Settings
 
-When they ask what the settings are, or to see them:
+A current value is whatever `expense-v2 settings` prints. That includes whether debug is on. Do not answer a current value from memory. Run the command first.
+
+When they ask what the settings are, whether one of them is on, or to see them:
 
 ```bash
 expense-v2 settings
@@ -43,9 +45,7 @@ Password, secret, token, and api key values come back as `(set)` or `(empty)`. D
 
 ## After the command
 
-If the command exits 0, your entire final answer is exactly `[SILENT]`.
-
-The program already sent the ntfy message when it exits 0. Do not repeat it. Do not send ntfy yourself. Do not invent a curl command. Do not run sudo.
+The command prints the settings and posts the same text. Your reply may use only values that appear in that output. If they asked one question, answer that question. If they asked to see every setting, say the list was posted. Do not invent a value that was not printed. Do not send ntfy yourself. Do not invent a curl command. Do not run sudo.
 
 ## Other conversation
 

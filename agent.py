@@ -834,6 +834,7 @@ def settings_command(argv: list[str]) -> None:
             message = f"Could not change that setting: {exc}"
     if waiting:
         message += f"\n\nThe claim is still waiting on {cfg['ntfy_topic']}."
+    print(message, flush=True)
     say(cfg, "Expense settings", message, topic=CHAT_TOPIC)
 
 
