@@ -76,6 +76,8 @@ from sheet import (
 )
 
 ENV_FILE_DEFAULT = "/etc/expense-agent-v2/env"
+# A mailbox command that cannot finish in this long has a dead socket, not a slow server.
+MAIL_TIMEOUT_SECONDS = 120
 LOCK_PATH = Path.home() / ".hermes" / "expense-v2.lock"
 OUTAGE_STAMP = Path.home() / ".hermes" / "expense-v2-mailbox-error"
 
@@ -171,10 +173,23 @@ def load_config() -> dict[str, Any]:
 
 
 def connect(cfg: dict[str, Any]) -> imaplib.IMAP4_SSL:
-    imap = imaplib.IMAP4_SSL(str(cfg["host"]), int(cfg["port"]))
+    imap = imaplib.IMAP4_SSL(str(cfg["host"]), int(cfg["port"]), timeout=MAIL_TIMEOUT_SECONDS)
     imap.login(str(cfg["user"]), str(cfg["password"]))
     ensure_mail_folders(imap, configured_folders(cfg))
     return imap
+
+
+def release_mail(imap: imaplib.IMAP4 | None) -> None:
+    """Close a mailbox connection. A failed logout still closes the socket."""
+    if imap is None:
+        return
+    try:
+        imap.logout()
+    except Exception:
+        try:
+            imap.shutdown()
+        except Exception:
+            pass
 
 
 def say(
@@ -458,8 +473,8 @@ def clear_outage() -> None:
 def move_mail(cfg: dict[str, Any], message_id: str, dest: str) -> None:
     """Move a message on a new connection.
 
-    The check keeps its first connection open while the vision model runs. The
-    server drops that idle connection, so the move has to dial in again.
+    Crop and slip reads can sit for hours. The check closes its first
+    connection before those calls, and the move dials in again afterwards.
     """
     fresh = connect(cfg)
     try:
@@ -569,6 +584,9 @@ def process_message(cfg: dict[str, Any], imap: imaplib.IMAP4, msg: Any) -> None:
         file_mail(imap, mid, str(cfg["folder_rejected"]), cfg)
         log("rejected: password")
         return
+    # The message is already in memory. Crop and the slip read must not leave
+    # this connection idle, or the server drops it before the later move.
+    release_mail(imap)
     live: list[Path] = []
     proofs_saved = False
     try:
@@ -874,6 +892,41 @@ def capture_locked(text: str) -> None:
         capture(text)
 
 
+def listen_pass(cfg: dict[str, Any], since: str) -> str:
+    """Read one subscription. Close it before a model call.
+
+    Deciding a claim reply runs the model, which can sit for a long time. The
+    notification stream would go idle and the server would drop it, so the
+    reply is handled only after that stream is closed. Returns the cursor.
+    """
+    root = Path(str(cfg["state_dir"]))
+    held: tuple[str, str] | None = None
+    for item in iter_messages(str(cfg["ntfy_url"]), str(cfg["ntfy_topic"]), since):
+        msg_id = str(item.get("id") or "")
+        if msg_id and msg_id == since:
+            continue
+        text = claim_reply_text(item)
+        if text:
+            held = (text, msg_id)
+            break
+        if msg_id:
+            since = msg_id
+            claim_state.save_cursor(root, since, claim_state.LISTEN_CURSOR_NAME)
+    if held is None:
+        return since
+    text, msg_id = held
+    try:
+        capture_locked(text)
+    except Busy:
+        raise
+    except Exception as exc:
+        log(f"listen capture failed: {exc}")
+    if msg_id:
+        since = msg_id
+        claim_state.save_cursor(root, since, claim_state.LISTEN_CURSOR_NAME)
+    return since
+
+
 def listen() -> None:
     """Follow the claim topic. The assistant is not subscribed to it."""
     cfg = load_config()
@@ -885,23 +938,10 @@ def listen() -> None:
     log(f"listening for claim replies on {cfg['ntfy_topic']}")
     while True:
         try:
-            for item in iter_messages(str(cfg["ntfy_url"]), str(cfg["ntfy_topic"]), since):
-                msg_id = str(item.get("id") or "")
-                if msg_id and msg_id == since:
-                    continue
-                text = claim_reply_text(item)
-                if text:
-                    try:
-                        capture_locked(text)
-                    except Busy:
-                        log("listen busy")
-                        time.sleep(5)
-                        break
-                    except Exception as exc:
-                        log(f"listen capture failed: {exc}")
-                if msg_id:
-                    since = msg_id
-                    claim_state.save_cursor(root, since, claim_state.LISTEN_CURSOR_NAME)
+            since = listen_pass(cfg, since)
+        except Busy:
+            log("listen busy")
+            time.sleep(5)
         except NtfyRateLimit:
             log("listen rate limited")
             time.sleep(60)

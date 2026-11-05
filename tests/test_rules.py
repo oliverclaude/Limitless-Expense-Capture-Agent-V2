@@ -522,6 +522,134 @@ class DebugTests(unittest.TestCase):
             self.assertFalse(missing.exists())
 
 
+class ConnectionTests(unittest.TestCase):
+    def test_connect_gives_the_socket_a_timeout(self) -> None:
+        from unittest import mock
+
+        import agent
+
+        imap = mock.Mock()
+        cfg = {"host": "mail.example", "port": 993, "user": "user", "password": "secret"}
+        with mock.patch.object(agent.imaplib, "IMAP4_SSL", return_value=imap) as ctor:
+            with mock.patch.object(agent, "ensure_mail_folders"):
+                agent.connect(cfg)
+        ctor.assert_called_once_with("mail.example", 993, timeout=agent.MAIL_TIMEOUT_SECONDS)
+        imap.login.assert_called_once_with("user", "secret")
+
+    def test_release_mail_closes_the_socket_when_logout_fails(self) -> None:
+        from unittest import mock
+
+        import agent
+
+        imap = mock.Mock()
+        imap.logout.side_effect = OSError("timed out")
+        agent.release_mail(imap)
+        imap.shutdown.assert_called_once()
+        agent.release_mail(None)
+
+    def test_reject_uses_the_open_mailbox(self) -> None:
+        from email.message import EmailMessage
+        from unittest import mock
+
+        import agent
+
+        msg = EmailMessage()
+        msg["Message-ID"] = "<claim@example>"
+        msg["Subject"] = "ClaimV2: Test"
+        imap = mock.Mock()
+        cfg = {"claim_from": [], "claim_password": "secret", "folder_rejected": "rejected"}
+        with mock.patch.object(agent, "sender_allowed", return_value=False):
+            with mock.patch.object(agent, "file_mail") as file_mail:
+                agent.process_message(cfg, imap, msg)
+        file_mail.assert_called_once_with(imap, "<claim@example>", "rejected", cfg)
+        imap.logout.assert_not_called()
+
+    def test_model_work_drops_the_mailbox_first(self) -> None:
+        from email.message import EmailMessage
+        from unittest import mock
+
+        import agent
+
+        msg = EmailMessage()
+        msg["Message-ID"] = "<claim@example>"
+        msg["Subject"] = "ClaimV2: Test"
+        orig = Path("/tmp/2026-11/proofs/pending_orig.jpg")
+        order: list[str] = []
+        imap = mock.Mock()
+        imap.logout.side_effect = lambda: order.append("logout")
+
+        def crop(paths, live=None):
+            order.append("crop")
+            return [{"orig": orig, "scan": None, "text": "", "status": "ok"}]
+
+        def slip(**kwargs):
+            order.append("slip")
+            return {"comment": "Test"}
+
+        cfg = {
+            "expenses_root": "/tmp",
+            "high_value_zar": 500,
+            "claim_from": ["person@example"],
+            "claim_password": "secret",
+            "folder_rejected": "rejected",
+        }
+        with mock.patch.object(agent, "sender_allowed", return_value=True):
+            with mock.patch.object(agent, "body_has_password", return_value=True):
+                with mock.patch.object(agent, "save_originals", return_value=[orig]):
+                    with mock.patch.object(agent, "prepare_proofs", side_effect=crop):
+                        with mock.patch.object(agent, "extract_claim", side_effect=slip):
+                            with mock.patch.object(agent, "hold") as hold:
+                                agent.process_message(cfg, imap, msg)
+        self.assertEqual(order, ["logout", "crop", "slip"])
+        hold.assert_called_once()
+        imap.shutdown.assert_not_called()
+
+    def test_listen_closes_the_stream_before_the_model(self) -> None:
+        from unittest import mock
+
+        import agent
+
+        closed: list[str] = []
+        saved: list[str] = []
+
+        def fake_iter(base, topic, since, idle_timeout=60):
+            try:
+                yield {"id": "9", "event": "message", "message": "from the program", "tags": ["hermes-agent"]}
+                yield {"id": "10", "event": "message", "message": "please log it", "tags": []}
+                yield {"id": "11", "event": "message", "message": "later", "tags": []}
+            finally:
+                closed.append("closed")
+
+        def capture(text):
+            self.assertEqual(closed, ["closed"])
+            self.assertEqual(text, "please log it")
+
+        cfg = {"ntfy_url": "http://notify.example", "ntfy_topic": "Fin-Limitless-V2", "state_dir": "/tmp/state"}
+        with mock.patch.object(agent, "iter_messages", fake_iter):
+            with mock.patch.object(agent, "capture_locked", side_effect=capture):
+                with mock.patch.object(agent.claim_state, "save_cursor", side_effect=lambda root, cursor, name: saved.append(cursor)):
+                    cursor = agent.listen_pass(cfg, "1")
+        self.assertEqual(cursor, "10")
+        self.assertEqual(saved, ["9", "10"])
+        self.assertEqual(closed, ["closed"])
+
+    def test_listen_busy_does_not_advance_past_the_reply(self) -> None:
+        from unittest import mock
+
+        import agent
+
+        def fake_iter(base, topic, since, idle_timeout=60):
+            yield {"id": "10", "event": "message", "message": "please log it", "tags": []}
+
+        cfg = {"ntfy_url": "http://notify.example", "ntfy_topic": "Fin-Limitless-V2", "state_dir": "/tmp/state"}
+        with mock.patch.object(agent, "iter_messages", fake_iter):
+            with mock.patch.object(agent, "capture_locked", side_effect=agent.Busy()):
+                with mock.patch.object(agent.claim_state, "save_cursor") as save_cursor:
+                    with self.assertRaises(agent.Busy):
+                        agent.listen_pass(cfg, "1")
+        save_cursor.assert_not_called()
+
+
 class VatTests(unittest.TestCase):
     def test_entertainment_vat_is_forced_to_zero(self) -> None:
         fields = {"journal": "Entertainment", "vat": 15.0}
