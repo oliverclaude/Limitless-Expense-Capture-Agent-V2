@@ -178,6 +178,27 @@ class SettingTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             normalize_value("DEBUG_NTFY", "yes")
 
+    def test_move_mail_dials_again_and_closes_that_connection(self) -> None:
+        from unittest import mock
+
+        import agent
+
+        fresh = mock.Mock()
+        cfg = {"folder_processed": "processed"}
+        with mock.patch.object(agent, "connect", return_value=fresh) as connect:
+            with mock.patch.object(agent, "file_mail") as file_mail:
+                agent.move_mail(cfg, "<id>", "processed")
+        connect.assert_called_once_with(cfg)
+        file_mail.assert_called_once_with(fresh, "<id>", "processed", cfg)
+        fresh.logout.assert_called_once()
+
+        fresh.reset_mock()
+        with mock.patch.object(agent, "connect", return_value=fresh):
+            with mock.patch.object(agent, "file_mail", side_effect=RuntimeError("dead")):
+                with self.assertRaises(RuntimeError):
+                    agent.move_mail(cfg, "<id>", "processed")
+        fresh.logout.assert_called_once()
+
     def test_settings_command_prints_the_live_list(self) -> None:
         import io
         from contextlib import redirect_stdout

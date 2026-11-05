@@ -455,17 +455,33 @@ def clear_outage() -> None:
     OUTAGE_STAMP.unlink(missing_ok=True)
 
 
-def major_failure(cfg: dict[str, Any], imap: imaplib.IMAP4 | None, mid: str, paths: list[Path], subject: str, reason: str) -> None:
-    delete_paths(paths)
-    if imap is not None and mid:
+def move_mail(cfg: dict[str, Any], message_id: str, dest: str) -> None:
+    """Move a message on a new connection.
+
+    The check keeps its first connection open while the vision model runs. The
+    server drops that idle connection, so the move has to dial in again.
+    """
+    fresh = connect(cfg)
+    try:
+        file_mail(fresh, message_id, dest, cfg)
+    finally:
         try:
-            file_mail(imap, mid, str(cfg["folder_failed"]), cfg)
+            fresh.logout()
+        except Exception:
+            pass
+
+
+def major_failure(cfg: dict[str, Any], mid: str, paths: list[Path], subject: str, reason: str) -> None:
+    delete_paths(paths)
+    if mid:
+        try:
+            move_mail(cfg, mid, str(cfg["folder_failed"]))
         except Exception as exc:
             log(f"could not file failed mail: {exc}")
     say(cfg, "Claim failed", failure_text(subject, reason))
 
 
-def finish_logged(cfg: dict[str, Any], imap: imaplib.IMAP4, claim: dict[str, Any], note: str = "") -> None:
+def finish_logged(cfg: dict[str, Any], claim: dict[str, Any], note: str = "") -> None:
     fields = dict(claim.get("fields") or {})
     orig = Path(str(claim.get("orig_path") or ""))
     if orig.is_file():
@@ -481,7 +497,7 @@ def finish_logged(cfg: dict[str, Any], imap: imaplib.IMAP4, claim: dict[str, Any
     claim["notified"] = True
     claim_state.save_claim(Path(str(cfg["state_dir"])), claim)
     try:
-        file_mail(imap, str(claim.get("message_id") or ""), str(cfg["folder_processed"]), cfg)
+        move_mail(cfg, str(claim.get("message_id") or ""), str(cfg["folder_processed"]))
     except Exception as exc:
         log(f"file processed failed: {exc}")
     message = logged_text(fields, done_ok)
@@ -490,7 +506,7 @@ def finish_logged(cfg: dict[str, Any], imap: imaplib.IMAP4, claim: dict[str, Any
     say(cfg, "Claim logged", message, image_of(claim))
 
 
-def finish_skipped(cfg: dict[str, Any], imap: imaplib.IMAP4, claim: dict[str, Any]) -> None:
+def finish_skipped(cfg: dict[str, Any], claim: dict[str, Any]) -> None:
     fields = dict(claim.get("fields") or {})
     delete_paths(claim_paths(claim))
     mail_ok = True
@@ -504,19 +520,19 @@ def finish_skipped(cfg: dict[str, Any], imap: imaplib.IMAP4, claim: dict[str, An
     claim["notified"] = True
     claim_state.save_claim(Path(str(cfg["state_dir"])), claim)
     try:
-        file_mail(imap, str(claim.get("message_id") or ""), str(cfg["folder_processed"]), cfg)
+        move_mail(cfg, str(claim.get("message_id") or ""), str(cfg["folder_processed"]))
     except Exception as exc:
         log(f"file processed failed: {exc}")
     say(cfg, "Claim skipped", skipped_text(fields, mail_ok))
 
 
-def hold(cfg: dict[str, Any], imap: imaplib.IMAP4, claim: dict[str, Any], message: str) -> None:
+def hold(cfg: dict[str, Any], claim: dict[str, Any], message: str) -> None:
     claim["status"] = "awaiting_reply"
     claim["notified"] = False
     root = Path(str(cfg["state_dir"]))
     claim_state.save_claim(root, claim)
     try:
-        file_mail(imap, str(claim.get("message_id") or ""), str(cfg["folder_review"]), cfg)
+        move_mail(cfg, str(claim.get("message_id") or ""), str(cfg["folder_review"]))
     except Exception as exc:
         log(f"file review failed: {exc}")
     if say(cfg, "Claim needs you", message, image_of(claim)):
@@ -600,7 +616,7 @@ def process_message(cfg: dict[str, Any], imap: imaplib.IMAP4, msg: Any) -> None:
             delete_paths(live)
             raise
         log(traceback.format_exc())
-        major_failure(cfg, imap, mid, live, subject, str(exc))
+        major_failure(cfg, mid, live, subject, str(exc))
         return
 
     proof_paths = []
@@ -635,15 +651,14 @@ def process_message(cfg: dict[str, Any], imap: imaplib.IMAP4, msg: Any) -> None:
         "ask_count": 0,
     }
     if not reasons:
-        finish_logged(cfg, imap, claim)
+        finish_logged(cfg, claim)
         return
     message = duplicate_text(dup or {}, again=False) if hold_kind == "duplicate" else review_text(fields, reasons)
-    hold(cfg, imap, claim, message)
+    hold(cfg, claim, message)
 
 
 def apply_reply(
     cfg: dict[str, Any],
-    imap: imaplib.IMAP4,
     claim: dict[str, Any],
     text: str,
     action: str | None = None,
@@ -663,7 +678,7 @@ def apply_reply(
                 claim_state.save_claim(Path(str(cfg["state_dir"])), claim)
             return
         if chosen == "drop_new":
-            finish_skipped(cfg, imap, claim)
+            finish_skipped(cfg, claim)
             return
         note = ""
         if chosen == "remove_old":
@@ -675,7 +690,7 @@ def apply_reply(
         fields["needs_review"] = False
         fields["review_reasons"] = []
         claim["fields"] = fields
-        finish_logged(cfg, imap, claim, note)
+        finish_logged(cfg, claim, note)
         return
 
     result = apply_decision(fields, journals, action, overrides, extra=text)
@@ -683,7 +698,7 @@ def apply_reply(
     fields = dict(result["fields"])
     claim["fields"] = fields
     if action == "skip":
-        finish_skipped(cfg, imap, claim)
+        finish_skipped(cfg, claim)
         return
     if action == "ask" or (action == "update" and fields.get("needs_review")):
         reasons = list(fields.get("review_reasons") or claim.get("reasons") or ["needs a decision"])
@@ -704,7 +719,7 @@ def apply_reply(
     fields["needs_review"] = False
     fields["review_reasons"] = []
     claim["fields"] = fields
-    finish_logged(cfg, imap, claim)
+    finish_logged(cfg, claim)
 
 
 def apply_setting(cfg: dict[str, Any], change: dict[str, str]) -> str:
@@ -806,14 +821,7 @@ def reply(text: str, action: str | None = None, overrides: dict[str, Any] | None
                 flush=True,
             )
         raise RuntimeError("reply needs --action")
-    imap = connect(cfg)
-    try:
-        apply_reply(cfg, imap, waiting[0], text, action, overrides)
-    finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
+    apply_reply(cfg, waiting[0], text, action, overrides)
 
 
 def settings_command(argv: list[str]) -> None:
@@ -858,14 +866,7 @@ def capture(text: str) -> None:
         log(f"capture could not read the reply: {exc}")
         say(cfg, "Capture program", "Could not read that reply. The claim is still waiting.")
         return
-    imap = connect(cfg)
-    try:
-        apply_reply(cfg, imap, claim, text, decided["action"], decided.get("overrides"))
-    finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
+    apply_reply(cfg, claim, text, decided["action"], decided.get("overrides"))
 
 
 def capture_locked(text: str) -> None:
