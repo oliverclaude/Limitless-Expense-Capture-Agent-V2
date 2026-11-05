@@ -1,7 +1,7 @@
 ---
 name: expense-v2
 description: "Expense capture is your job. Load before you reply."
-version: 1.8.0
+version: 1.9.0
 platforms: [linux]
 metadata:
   hermes:
@@ -40,6 +40,13 @@ expense-v2 settings --set 'DEBUG_NTFY=0'
 ```
 
 `1` sends tool calls, thinking, and model output to the claim topic name with `-debug` added. `0` stops that. Do not print the trace yourself.
+
+To also write those notes to a file, including each tool's arguments and return code, set `DEBUG_LOG` to an absolute path. An empty value leaves the file off.
+
+```bash
+expense-v2 settings --set 'DEBUG_LOG=/home/claude/.hermes/logs/expense-v2-debug.log'
+expense-v2 settings --set 'DEBUG_LOG='
+```
 
 Password, secret, token, and api key values come back as `(set)` or `(empty)`. Do not try to print the hidden value yourself.
 

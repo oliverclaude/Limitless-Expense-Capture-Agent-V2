@@ -9,7 +9,7 @@ from pathlib import Path
 
 os.environ.setdefault("CLAIM_SUBJECT_PREFIX", "claimv2:")
 
-from debug_trace import debug_topic, describe_prompt, publish_debug, redact, split_thinking  # noqa: E402
+from debug_trace import debug_topic, describe_prompt, publish_debug, redact, split_thinking, tool_return_code  # noqa: E402
 from extract import apply_decision, apply_vat_policy, comment_from_subject  # noqa: E402
 from mail import is_claim_subject  # noqa: E402
 from ntfy_out import _message_from_line, claim_reply_text  # noqa: E402
@@ -177,6 +177,10 @@ class SettingTests(unittest.TestCase):
         self.assertEqual(normalize_value("DEBUG_NTFY", "1"), "1")
         with self.assertRaises(RuntimeError):
             normalize_value("DEBUG_NTFY", "yes")
+        self.assertEqual(normalize_value("DEBUG_LOG", "  "), "")
+        self.assertEqual(normalize_value("DEBUG_LOG", "/tmp/debug.log"), "/tmp/debug.log")
+        with self.assertRaises(RuntimeError):
+            normalize_value("DEBUG_LOG", "debug.log")
 
     def test_move_mail_dials_again_and_closes_that_connection(self) -> None:
         from unittest import mock
@@ -458,6 +462,64 @@ class DebugTests(unittest.TestCase):
             self.assertIn("https://example.com/ok", sent[0][2])
             self.assertNotIn("supersecretvalue", sent[0][2])
             self.assertIn("[url omitted]", redact("http://notify.example/x", hosts=["notify.example"], hidden_values=[]))
+
+    def test_empty_log_path_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "env"
+            path.write_text("DEBUG_NTFY=0\nDEBUG_LOG=\nNTFY_TOPIC=Fin-Limitless-V2\n", encoding="utf-8")
+            self.assertFalse(publish_debug("Tool result: terminal", "return_code: 0", env_path=path, sender=lambda *a, **k: None))
+            self.assertEqual(list(Path(tmp).glob("*.log")), [])
+
+    def test_log_path_records_a_tool_when_ntfy_is_off(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "env"
+            log_path = root / "debug.log"
+            path.write_text(
+                f"DEBUG_NTFY=0\nDEBUG_LOG={log_path}\nNTFY_URL=http://notify.example\n"
+                "OLLAMA_API_KEY=supersecretvalue\n",
+                encoding="utf-8",
+            )
+            sent: list[str] = []
+            body = "args: {\"cmd\": \"true\"}\nreturn_code: 0\nIMAP_PASSWORD=hunter2 supersecretvalue"
+            self.assertTrue(
+                publish_debug(
+                    "Tool result: terminal",
+                    body,
+                    env_path=path,
+                    sender=lambda *args, **kwargs: sent.append("sent"),
+                )
+            )
+            self.assertEqual(sent, [])
+            text = log_path.read_text(encoding="utf-8")
+            self.assertIn("Tool result: terminal", text)
+            self.assertIn("return_code: 0", text)
+            self.assertIn("IMAP_PASSWORD=(hidden)", text)
+            self.assertNotIn("hunter2", text)
+            self.assertNotIn("supersecretvalue", text)
+            self.assertEqual(tool_return_code('{"exit_code": 0, "output": ""}'), "0")
+            self.assertIsNone(tool_return_code("not json"))
+
+    def test_bad_log_path_still_publishes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "env"
+            missing = Path(tmp) / "missing" / "debug.log"
+            path.write_text(
+                f"DEBUG_NTFY=1\nDEBUG_LOG={missing}\nNTFY_URL=http://notify.example\n"
+                "NTFY_TOPIC=Fin-Limitless-V2\n",
+                encoding="utf-8",
+            )
+            sent: list[str] = []
+            self.assertTrue(
+                publish_debug(
+                    "Tool start: terminal",
+                    "args: {}",
+                    env_path=path,
+                    sender=lambda *args, **kwargs: sent.append("sent"),
+                )
+            )
+            self.assertEqual(sent, ["sent"])
+            self.assertFalse(missing.exists())
 
 
 class VatTests(unittest.TestCase):

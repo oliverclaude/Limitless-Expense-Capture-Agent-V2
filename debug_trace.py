@@ -1,11 +1,14 @@
-"""Publish a model trace to the claim topic plus -debug. Off unless DEBUG_NTFY=1.
+"""Publish a model trace to the claim topic plus -debug, and optionally to a file.
 
-The flag is read from the env file on each publish, not from the process environment,
-so a long-running listener sees a change without a restart. Failures are swallowed.
+Ntfy is off unless DEBUG_NTFY=1. The file is off unless DEBUG_LOG is a path.
+Both are read from the env file on each publish, not from the process environment,
+so a long-running process sees a change without a restart. Failures are swallowed.
+A file error does not stop the ntfy notes.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -13,6 +16,7 @@ import time
 import urllib.parse
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -30,6 +34,7 @@ _SECRET_LINE = re.compile(
 _purpose: ContextVar[str] = ContextVar("expense_model_purpose", default="model")
 _cache_lock = threading.Lock()
 _send_lock = threading.Lock()
+_log_lock = threading.Lock()
 _cache_at = 0.0
 _cache: dict[str, Any] | None = None
 _last_send = 0.0
@@ -161,6 +166,7 @@ def _settings(path: Path | None, *, fresh: bool = False) -> dict[str, Any]:
             hidden_values.append(value)
     loaded = {
         "enabled": env.get("DEBUG_NTFY", "").strip() == "1",
+        "log_path": env.get("DEBUG_LOG", "").strip(),
         "base": env.get("NTFY_URL", "").strip(),
         "topic": debug_topic(env.get("NTFY_TOPIC", "")),
         "hosts": _hosts(hide_urls),
@@ -186,6 +192,35 @@ def _chunks(text: str) -> list[str]:
     return parts
 
 
+def tool_return_code(result: Any, extra: dict[str, Any] | None = None) -> str | None:
+    """Exit code from a tool result, when the tool reports one."""
+    for source in (extra or {},):
+        for key in ("exit_code", "returncode", "return_code"):
+            if source.get(key) is not None:
+                return str(source[key])
+    parsed = result
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+    if isinstance(parsed, dict):
+        for key in ("exit_code", "returncode", "return_code"):
+            if parsed.get(key) is not None:
+                return str(parsed[key])
+    return None
+
+
+def _append_log(path: str, title: str, body: str) -> bool:
+    target = Path(path)
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    record = f"{stamp} {title}\n{body.rstrip()}\n\n"
+    with _log_lock:
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(record)
+    return True
+
+
 def publish_debug(
     title: str,
     body: str,
@@ -193,16 +228,28 @@ def publish_debug(
     env_path: Path | None = None,
     sender: Callable[..., None] | None = None,
 ) -> bool:
-    """Send one trace. Returns False when debug is off or the send did not happen."""
+    """Send one trace. Returns False when nothing was written or published."""
     global _last_send
     try:
         settings = _settings(env_path, fresh=env_path is not None)
-        if not settings["enabled"] or not settings["base"] or not settings["topic"]:
+        ntfy = bool(settings["enabled"] and settings["base"] and settings["topic"])
+        log_path = str(settings["log_path"] or "")
+        if not ntfy and not log_path:
             return False
         cleaned = redact(body, hosts=list(settings["hosts"]), hidden_values=list(settings["hidden_values"]))
+        if not cleaned.strip():
+            return False
+        logged = False
+        if log_path:
+            try:
+                logged = _append_log(log_path, title, cleaned)
+            except Exception:
+                logged = False
+        if not ntfy:
+            return logged
         parts = _chunks(cleaned)
         if not parts:
-            return False
+            return logged
         post = sender or send_text
         for index, part in enumerate(parts):
             with _send_lock:
@@ -225,6 +272,15 @@ def debug_enabled(path: Path | None = None) -> bool:
     try:
         settings = _settings(path, fresh=path is not None)
         return bool(settings["enabled"] and settings["base"] and settings["topic"])
+    except Exception:
+        return False
+
+
+def trace_enabled(path: Path | None = None) -> bool:
+    """True when ntfy debug is on or a log file path is set."""
+    try:
+        settings = _settings(path, fresh=path is not None)
+        return debug_enabled(path) or bool(settings.get("log_path"))
     except Exception:
         return False
 

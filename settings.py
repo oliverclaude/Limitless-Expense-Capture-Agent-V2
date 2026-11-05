@@ -85,6 +85,11 @@ def normalize_value(key: str, value: str) -> str:
             if value not in {"0", "1"}:
                 raise RuntimeError("DEBUG_NTFY must be 0 or 1")
             return value
+        if key == "DEBUG_LOG":
+            path = value.strip()
+            if path and not path.startswith("/"):
+                raise RuntimeError("DEBUG_LOG must be an absolute path, or empty to turn the file off")
+            return path
         if key in {"IMAP_PORT", "SMTP_PORT", "OLLAMA_TIMEOUT_SECONDS", "STATE_RETENTION_DAYS"}:
             number = int(value)
             if number < 0:
@@ -156,6 +161,11 @@ def apply_assignments(path: Path, pairs: list[tuple[str, str]], journals: list[s
             lines.append("Debug notes go to the claim topic plus -debug.")
         else:
             lines.append("Debug notes are off.")
+    if "DEBUG_LOG" in latest:
+        if latest["DEBUG_LOG"]:
+            lines.append("Debug notes are also written to that file.")
+        else:
+            lines.append("The debug log file is off.")
     if any(key in {"NTFY_URL", "NTFY_TOPIC"} for key in order):
         lines.append(
             "The claim listener uses that on its next start. The assistant topic was not changed. "

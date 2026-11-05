@@ -44,7 +44,7 @@ def _enqueue(title: str, body: str) -> None:
     if not text:
         return
     try:
-        if not _load_trace().debug_enabled():
+        if not _load_trace().trace_enabled():
             return
     except Exception:
         return
@@ -143,7 +143,7 @@ def _on_pre_tool(**kwargs: Any) -> None:
         if thinking.strip():
             _enqueue("Assistant thinking", thinking)
         name = str(kwargs.get("tool_name") or "tool")
-        _enqueue(f"Tool start: {name}", _dump(kwargs.get("args")))
+        _enqueue(f"Tool start: {name}", "args: " + _dump(kwargs.get("args")))
     except Exception:
         return None
     return None
@@ -152,11 +152,25 @@ def _on_pre_tool(**kwargs: Any) -> None:
 def _on_post_tool(**kwargs: Any) -> None:
     try:
         name = str(kwargs.get("tool_name") or "tool")
+        result = kwargs.get("result")
+        lines: list[str] = []
+        code = _load_trace().tool_return_code(result, kwargs)
+        if code is not None:
+            lines.append(f"return_code: {code}")
+        status = kwargs.get("status")
+        if status:
+            lines.append(f"status: {status}")
+        error_type = kwargs.get("error_type")
+        if error_type:
+            lines.append(f"error_type: {error_type}")
+        error_message = kwargs.get("error_message")
+        if error_message:
+            lines.append(f"error: {error_message}")
         duration = kwargs.get("duration_ms")
-        body = _dump(kwargs.get("result"))
         if duration is not None:
-            body = f"{duration} ms\n{body}"
-        _enqueue(f"Tool result: {name}", body)
+            lines.append(f"{duration} ms")
+        lines.append(_dump(result))
+        _enqueue(f"Tool result: {name}", "\n".join(lines))
     except Exception:
         return None
     return None

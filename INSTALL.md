@@ -98,6 +98,6 @@ That writes `~/.config/systemd/user/expense-v2-listen.service` and enables it. N
 
 ## 8. Debug topic
 
-Optional. Subscribe to `Fin-Limitless-V2-debug` on the same server as the claim topic. Nothing is published until `DEBUG_NTFY=1` in the expense env file. Chat can change that with `expense-v2 settings --set DEBUG_NTFY=1`.
+Optional. Subscribe to `Fin-Limitless-V2-debug` on the same server as the claim topic. Nothing is published until `DEBUG_NTFY=1` in the expense env file. Chat can change that with `expense-v2 settings --set DEBUG_NTFY=1`. Set `DEBUG_LOG` to an absolute file path to append the same notes there, including tool arguments and return codes. Leave `DEBUG_LOG` empty to keep the file off.
 
 The assistant's tool calls and thinking come from a Hermes plugin, `plugins/expense-v2-debug`. Link that directory into `~/.hermes/plugins`, add `expense-v2-debug` under `plugins.enabled`, and set `plugins.stream_reasoning_deltas` to `true`. Then restart the gateway once. After that, the env flag alone turns the trace on and off. The plugin does not decide claims and does not subscribe to the debug topic.
