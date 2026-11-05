@@ -223,12 +223,110 @@ def _timeout() -> int:
         return 3600
 
 
+def _piece(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for part in value:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+        return "".join(parts)
+    return ""
+
+
+def _take_stream_choice(chunk: dict[str, Any], content: list[str], reasoning: list[str]) -> None:
+    choices = chunk.get("choices") or []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    if "delta" in choice and isinstance(choice.get("delta"), dict):
+        source = choice["delta"]
+    elif isinstance(choice.get("message"), dict):
+        source = choice["message"]
+    else:
+        return
+    thought = source.get("reasoning")
+    if not isinstance(thought, str) or not thought:
+        thought = source.get("reasoning_content")
+    if isinstance(thought, str) and thought:
+        reasoning.append(thought)
+    piece = _piece(source.get("content"))
+    if piece:
+        content.append(piece)
+
+
+def _assembled(content: list[str], reasoning: list[str]) -> dict[str, Any]:
+    message: dict[str, Any] = {"content": "".join(content)}
+    thought = "".join(reasoning)
+    if thought:
+        message["reasoning"] = thought
+    return {"choices": [{"message": message}]}
+
+
+def read_chat_stream(chunks: Any, content: list[str] | None = None, reasoning: list[str] | None = None) -> dict[str, Any]:
+    """Read a streamed chat body. One plain JSON object is accepted too.
+
+    Reasoning deltas stay out of the answer. `<think>` blocks inside the
+    answer are removed later, the same way as a finished reply. The lists
+    collect text as it arrives so a timeout can still publish the part that
+    already came back.
+    """
+    if content is None:
+        content = []
+    if reasoning is None:
+        reasoning = []
+    buffered: list[str] = []
+    saw_event = False
+    for raw in chunks:
+        text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+        buffered.append(text)
+        line = text.strip()
+        if not line or line.startswith(":"):
+            continue
+        payload = line[5:].strip() if line.startswith("data:") else line
+        if payload == "[DONE]":
+            saw_event = True
+            break
+        try:
+            chunk = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(chunk, dict):
+            continue
+        error = chunk.get("error")
+        if isinstance(error, dict) and "choices" not in chunk:
+            message = error.get("message") or "model stream failed"
+            raise RuntimeError(str(message)[:800])
+        if not line.startswith("data:") and "choices" in chunk and not _chunk_has_delta(chunk):
+            return chunk
+        saw_event = True
+        _take_stream_choice(chunk, content, reasoning)
+    if not saw_event:
+        whole = "".join(buffered).strip()
+        if whole:
+            try:
+                parsed = json.loads(whole)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                return parsed
+    return _assembled(content, reasoning)
+
+
+def _chunk_has_delta(chunk: dict[str, Any]) -> bool:
+    choices = chunk.get("choices") or []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    return isinstance(choice.get("delta"), dict)
+
+
 def _post_chat(content: list[dict[str, Any]] | str) -> str:
     from debug_trace import note_model_failure, note_model_start
 
     payload = {
         "model": _model_name(),
         "temperature": 0.1,
+        "stream": True,
         "messages": [{"role": "user", "content": content}],
     }
     raw = json.dumps(payload).encode("utf-8")
@@ -242,18 +340,22 @@ def _post_chat(content: list[dict[str, Any]] | str) -> str:
         },
     )
     note_model_start(content)
+    # The socket timeout is silence between blocks. A block starts the wait again.
+    arrived: list[str] = []
+    thoughts: list[str] = []
     try:
         with urllib.request.urlopen(request, timeout=_timeout()) as response:
-            data = json.loads(response.read().decode("utf-8"))
+            data = read_chat_stream(response, arrived, thoughts)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:800]
         note_model_failure(RuntimeError(f"model HTTP {exc.code}: {detail}"))
         raise RuntimeError(f"model HTTP {exc.code}: {detail}") from exc
-    except TimeoutError as exc:
-        note_model_failure(exc)
-        raise RuntimeError("model timed out") from exc
     except Exception as exc:
+        if arrived or thoughts:
+            _publish_model_trace(_assembled(arrived, thoughts))
         note_model_failure(exc)
+        if isinstance(exc, TimeoutError):
+            raise RuntimeError("model timed out") from exc
         raise
     _publish_model_trace(data)
     return _message_text(data)

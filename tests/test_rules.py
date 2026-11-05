@@ -650,6 +650,44 @@ class ConnectionTests(unittest.TestCase):
         save_cursor.assert_not_called()
 
 
+class StreamReadTests(unittest.TestCase):
+    def test_reasoning_deltas_stay_out_of_the_answer(self) -> None:
+        from extract import _message_text, read_chat_stream
+
+        body = [
+            b'data: {"choices":[{"delta":{"reasoning":"look at the date"}}]}\n',
+            b"\n",
+            b'data: {"choices":[{"delta":{"content":"<think>more</think>{\\"total\\": 10}"}}]}\n',
+            b"data: [DONE]\n",
+        ]
+        arrived: list[str] = []
+        thoughts: list[str] = []
+        data = read_chat_stream(body, arrived, thoughts)
+        self.assertEqual(_message_text(data), '{"total": 10}')
+        self.assertEqual(data["choices"][0]["message"]["reasoning"], "look at the date")
+        self.assertEqual(arrived, ['<think>more</think>{"total": 10}'])
+        self.assertEqual(thoughts, ["look at the date"])
+
+    def test_reasoning_content_and_a_plain_json_body(self) -> None:
+        from extract import _message_text, read_chat_stream
+
+        streamed = [
+            b'data: {"choices":[{"delta":{"reasoning_content":"checking"}}]}\n',
+            b'data: {"choices":[{"delta":{"content":"{\\"ok\\": true}"}}]}\n',
+        ]
+        data = read_chat_stream(streamed)
+        self.assertEqual(data["choices"][0]["message"]["reasoning"], "checking")
+        self.assertEqual(_message_text(data), '{"ok": true}')
+        whole = b'{"choices":[{"message":{"content":"plain answer"}}]}\n'
+        self.assertEqual(_message_text(read_chat_stream([whole])), "plain answer")
+
+    def test_an_error_block_fails_the_read(self) -> None:
+        from extract import read_chat_stream
+
+        with self.assertRaises(RuntimeError):
+            read_chat_stream([b'data: {"error":{"message":"overloaded"}}\n'])
+
+
 class VatTests(unittest.TestCase):
     def test_entertainment_vat_is_forced_to_zero(self) -> None:
         fields = {"journal": "Entertainment", "vat": 15.0}
