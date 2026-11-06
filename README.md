@@ -10,7 +10,7 @@ Version 1 is a separate program and a separate mailbox prefix (`claim:`). This r
 
 `mail.py` talks to the mailbox. It accepts a subject only when it starts with `claimv2:` (case is ignored), checks the sender and the body password, saves the photo or PDF, and files the message into processed, needs review, failed, or rejected.
 
-`extract.py` sends the slip to the local vision model, then applies the expense rules in code: whose money it was, the journal, VAT, and the comment taken from the subject. It does not call xAI.
+`extract.py` sends the slip to the model named in the env file, then applies the expense rules in code: whose money it was, the journal, VAT, and the comment taken from the subject. The env file has the local model and the version 1 server. One of those blocks is commented out.
 
 `crop.py` asks the vision model for the four corners of the paper. It makes a polygon from those points and pulls it into a rectangle, using the longer horizontal edge as the width and the longer vertical edge as the height. Pixels outside that rectangle are dropped. If the model returns no corners, the older OpenCV crop is used.
 
@@ -22,7 +22,7 @@ Version 1 is a separate program and a separate mailbox prefix (`claim:`). This r
 
 `done_mail.py` sends the Done or Skipped email to the work address in the env file. It does not reply to whatever address was on the claim.
 
-`ntfy_out.py` sends the picture, then the words, on `Fin-Limitless-V2`. Both messages are tagged `hermes-agent` so the claim listener does not treat them as a person typing. The assistant topic name is `Fin-Limitless-V2-chat`. When `DEBUG_NTFY=1`, `debug_trace.py` also publishes tool calls, thinking, and model replies on `Fin-Limitless-V2-debug`. The assistant does not listen there. `0` turns that off. `DEBUG_LOG` is an absolute file path for the same notes, including each tool's arguments and return code. An empty value leaves the file off. Both are read from the env file each time, so the listener does not need a restart.
+`ntfy_out.py` sends the picture, then the words, on `Fin-Limitless-V2`. Both messages are tagged `hermes-agent` so the claim listener does not treat them as a person typing. The assistant topic name is `Fin-Limitless-V2-chat`. When `DEBUG_NTFY=1`, `debug_trace.py` also publishes tool calls, thinking, model replies, and the cost of each model call on `Fin-Limitless-V2-debug`. The assistant does not listen there. `0` turns that off. `DEBUG_LOG` is an absolute file path for the same notes, including each tool's arguments and return code. An empty value leaves the file off. Both are read from the env file each time, so the listener does not need a restart.
 
 `replies.py` does not match the user's words. The claim listener asks the local model for the action. For a normal claim that is `confirm`, `skip`, `update`, or `ask`. For a duplicate it is `keep`, `remove_old`, `drop_new`, or `ask`. `ok` and `yes` are not a duplicate decision. `remove_old` means use the new line: the old sheet row and its proof files are deleted, then the new line is logged.
 

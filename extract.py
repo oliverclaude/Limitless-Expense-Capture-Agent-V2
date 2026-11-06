@@ -197,11 +197,53 @@ def _preview_jpeg(path: Path, max_side: int = 1600) -> bytes:
     return buf.getvalue()
 
 
+TICKS_PER_USD = 10_000_000_000
+
+
 def _model_name() -> str:
     name = os.environ.get("OLLAMA_MODEL", "").strip()
     if not name:
         raise RuntimeError("missing env: OLLAMA_MODEL")
     return name
+
+
+def _include_usage() -> bool:
+    """The version 1 server returns a dollar cost only when usage is requested."""
+    return "api.x.ai" in os.environ.get("OLLAMA_BASE_URL", "")
+
+
+def format_call_cost(usage: Any) -> str:
+    """One line for the debug note. Missing usage still gets a line."""
+    if not isinstance(usage, dict) or not usage:
+        return "cost: not reported"
+    ticks = usage.get("cost_in_usd_ticks")
+    if isinstance(ticks, (int, float)) and not isinstance(ticks, bool):
+        cost = f"cost: ${float(ticks) / TICKS_PER_USD:.6f}"
+    else:
+        cost = "cost: not reported"
+    parts = [cost]
+    prompt = _usage_count(usage, "prompt_tokens", "input_tokens")
+    completion = _usage_count(usage, "completion_tokens", "output_tokens")
+    if prompt is not None:
+        parts.append(f"prompt {prompt}")
+    if completion is not None:
+        parts.append(f"completion {completion}")
+    return " | ".join(parts)
+
+
+def _usage_count(usage: dict[str, Any], *names: str) -> int | None:
+    for name in names:
+        value = usage.get(name)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value)
+    return None
+
+
+def _remember_usage(chunk: dict[str, Any], usage: dict[str, Any]) -> None:
+    raw = chunk.get("usage")
+    if isinstance(raw, dict) and raw:
+        usage.clear()
+        usage.update(raw)
 
 
 def _chat_url() -> str:
@@ -264,18 +306,25 @@ def _assembled(content: list[str], reasoning: list[str]) -> dict[str, Any]:
     return {"choices": [{"message": message}]}
 
 
-def read_chat_stream(chunks: Any, content: list[str] | None = None, reasoning: list[str] | None = None) -> dict[str, Any]:
+def read_chat_stream(
+    chunks: Any,
+    content: list[str] | None = None,
+    reasoning: list[str] | None = None,
+    usage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Read a streamed chat body. One plain JSON object is accepted too.
 
     Reasoning deltas stay out of the answer. `<think>` blocks inside the
     answer are removed later, the same way as a finished reply. The lists
     collect text as it arrives so a timeout can still publish the part that
-    already came back.
+    already came back. `usage` keeps the latest usage object from the server.
     """
     if content is None:
         content = []
     if reasoning is None:
         reasoning = []
+    if usage is None:
+        usage = {}
     buffered: list[str] = []
     saw_event = False
     for raw in chunks:
@@ -298,6 +347,7 @@ def read_chat_stream(chunks: Any, content: list[str] | None = None, reasoning: l
         if isinstance(error, dict) and "choices" not in chunk:
             message = error.get("message") or "model stream failed"
             raise RuntimeError(str(message)[:800])
+        _remember_usage(chunk, usage)
         if not line.startswith("data:") and "choices" in chunk and not _chunk_has_delta(chunk):
             return chunk
         saw_event = True
@@ -310,8 +360,12 @@ def read_chat_stream(chunks: Any, content: list[str] | None = None, reasoning: l
             except json.JSONDecodeError:
                 parsed = None
             if isinstance(parsed, dict):
+                _remember_usage(parsed, usage)
                 return parsed
-    return _assembled(content, reasoning)
+    assembled = _assembled(content, reasoning)
+    if usage:
+        assembled["usage"] = dict(usage)
+    return assembled
 
 
 def _chunk_has_delta(chunk: dict[str, Any]) -> bool:
@@ -321,7 +375,7 @@ def _chunk_has_delta(chunk: dict[str, Any]) -> bool:
 
 
 def _post_chat(content: list[dict[str, Any]] | str) -> str:
-    from debug_trace import note_model_failure, note_model_start
+    from debug_trace import note_model_cost, note_model_failure, note_model_start
 
     payload = {
         "model": _model_name(),
@@ -329,6 +383,8 @@ def _post_chat(content: list[dict[str, Any]] | str) -> str:
         "stream": True,
         "messages": [{"role": "user", "content": content}],
     }
+    if _include_usage():
+        payload["stream_options"] = {"include_usage": True}
     raw = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         _chat_url(),
@@ -343,21 +399,28 @@ def _post_chat(content: list[dict[str, Any]] | str) -> str:
     # The socket timeout is silence between blocks. A block starts the wait again.
     arrived: list[str] = []
     thoughts: list[str] = []
+    usage: dict[str, Any] = {}
     try:
         with urllib.request.urlopen(request, timeout=_timeout()) as response:
-            data = read_chat_stream(response, arrived, thoughts)
+            data = read_chat_stream(response, arrived, thoughts, usage)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:800]
         note_model_failure(RuntimeError(f"model HTTP {exc.code}: {detail}"))
+        note_model_cost(format_call_cost(usage))
         raise RuntimeError(f"model HTTP {exc.code}: {detail}") from exc
     except Exception as exc:
         if arrived or thoughts:
             _publish_model_trace(_assembled(arrived, thoughts))
         note_model_failure(exc)
+        note_model_cost(format_call_cost(usage))
         if isinstance(exc, TimeoutError):
             raise RuntimeError("model timed out") from exc
         raise
+    reported = data.get("usage") if isinstance(data, dict) else None
+    if isinstance(reported, dict) and reported:
+        usage = reported
     _publish_model_trace(data)
+    note_model_cost(format_call_cost(usage))
     return _message_text(data)
 
 

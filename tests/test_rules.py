@@ -687,6 +687,22 @@ class StreamReadTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             read_chat_stream([b'data: {"error":{"message":"overloaded"}}\n'])
 
+    def test_a_final_usage_chunk_is_kept(self) -> None:
+        from extract import format_call_cost, read_chat_stream
+
+        body = [
+            b'data: {"choices":[{"delta":{"content":"{\\"ok\\": true}"}}]}\n',
+            b'data: {"choices":[],"usage":{"prompt_tokens":32,"completion_tokens":9,"cost_in_usd_ticks":37756000}}\n',
+            b"data: [DONE]\n",
+        ]
+        usage: dict = {}
+        data = read_chat_stream(body, usage=usage)
+        self.assertEqual(data["usage"]["cost_in_usd_ticks"], 37756000)
+        self.assertEqual(usage["prompt_tokens"], 32)
+        self.assertEqual(format_call_cost(data["usage"]), "cost: $0.003776 | prompt 32 | completion 9")
+        self.assertEqual(format_call_cost(None), "cost: not reported")
+        self.assertEqual(format_call_cost({"input_tokens": 4, "output_tokens": 1}), "cost: not reported | prompt 4 | completion 1")
+
 
 class VatTests(unittest.TestCase):
     def test_entertainment_vat_is_forced_to_zero(self) -> None:

@@ -289,6 +289,11 @@ def note_model_failure(exc: BaseException) -> None:
     publish_debug(f"{current_purpose()}: failed", f"{type(exc).__name__}: {exc}")
 
 
+def note_model_cost(summary: str) -> None:
+    """Dollar cost for this call. The same note goes to ntfy and the log file."""
+    publish_debug(f"{current_purpose()}: cost", summary)
+
+
 def note_model_result(content: str, extra_thinking: str = "") -> None:
     thinking, visible = split_thinking(content)
     if extra_thinking.strip():
